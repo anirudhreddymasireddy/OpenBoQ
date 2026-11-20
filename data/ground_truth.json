@@ -1,0 +1,73 @@
+[
+  {
+    "type": "missing_site_setup",
+    "oz": "",
+    "rule": "R10",
+    "match": "Baustelleneinrichtung fehlt",
+    "deleted": [
+      "01.0010"
+    ]
+  },
+  {
+    "type": "missing_scaffold",
+    "oz": "",
+    "rule": "R10",
+    "match": "Gerüst fehlt",
+    "deleted": [
+      "06.0010",
+      "06.0020"
+    ]
+  },
+  {
+    "type": "vague_wording",
+    "oz": "01.0020",
+    "rule": "R08"
+  },
+  {
+    "type": "missing_parameter",
+    "oz": "05.0040",
+    "rule": "R09",
+    "param": "Nennweite"
+  },
+  {
+    "type": "unit_swap",
+    "oz": "03.0130",
+    "rule": "R02"
+  },
+  {
+    "type": "arithmetic",
+    "oz": "01.0030",
+    "rule": "R01"
+  },
+  {
+    "type": "outdated_norm",
+    "oz": "02.0040",
+    "rule": "R11"
+  },
+  {
+    "type": "unit_swap",
+    "oz": "02.0010",
+    "rule": "R02"
+  },
+  {
+    "type": "price_outlier_low",
+    "oz": "04.0020",
+    "rule": "R05"
+  },
+  {
+    "type": "price_outlier_high",
+    "oz": "03.0120",
+    "rule": "R05"
+  },
+  {
+    "type": "missing_parameter",
+    "oz": "04.0010",
+    "rule": "R09",
+    "param": "Wanddicke"
+  },
+  {
+    "type": "vague_wording",
+    "oz": "03.0040",
+    "rule": "R08"
+  }
+]

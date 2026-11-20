@@ -1,0 +1,32 @@
+[
+  {
+    "text": "Stahlbetonwand d = 30 cm, Beton nach Wahl des AN, einschließlich aller erforderlichen Nebenleistungen.",
+    "finding": "Betonfestigkeits- und Expositionsklasse fehlen; 'nach Wahl des AN' verlagert Qualitätsentscheidung auf den Bieter; Komplettheitsklausel in AGB oft unwirksam (§ 307 BGB).",
+    "fix": "Stahlbetonwand aus Ortbeton C30/37, XC4, XF1, d = 30 cm, Höhe bis 3,00 m, einbauen und verdichten. Schalung und Bewehrung werden gesondert vergütet."
+  },
+  {
+    "text": "Baugrube ausheben, Bodenklasse 3–5, Boden seitlich lagern.",
+    "finding": "Bodenklassen sind seit VOB/C 2016 durch Homogenbereiche (DIN 18300) ersetzt – Baugrundrisiko unklar verteilt.",
+    "fix": "Baugrube ausheben, Homogenbereich [B1] gemäß Geotechnischem Bericht vom [Datum], Aushubtiefe bis [3,00] m, Boden seitlich lagern."
+  },
+  {
+    "text": "Fassadengerüst stellen und vorhalten.",
+    "finding": "Lastklasse, Breitenklasse und Standzeit fehlen; Vorhaltung über die Standzeit hinaus nicht geregelt → Nachtrag für Gebrauchsüberlassung.",
+    "fix": "Fassadengerüst, Lastklasse 3, Breitenklasse W09, einschließlich Seitenschutz, aufstellen, Grundstandzeit [8] Wochen vorhalten und abbauen. Gebrauchsüberlassung über die Grundstandzeit hinaus siehe Pos. [..]."
+  },
+  {
+    "text": "Abdichtung der Kelleraußenwände gemäß DIN 18195.",
+    "finding": "DIN 18195 ist seit 2017 durch DIN 18533 ersetzt; Wassereinwirkungsklasse und Abdichtungsstoff fehlen.",
+    "fix": "Abdichtung erdberührter Wände mit PMBC, Wassereinwirkungsklasse [W1.2-E] nach DIN 18533, Trockenschichtdicke mind. [3] mm, einschließlich Hohlkehle."
+  },
+  {
+    "text": "Unvorhergesehene Arbeiten nach Angabe der Bauleitung, 1 psch.",
+    "finding": "Leistung unbestimmt und pauschal – nicht kalkulierbar, Streit über Umfang programmiert; als Stundenlohn- oder Bedarfsposition mit klarer Abgrenzung ausschreiben.",
+    "fix": "Stundenlohnarbeiten Facharbeiter, nur auf schriftliche Anordnung der Bauleitung, Nachweis durch Stundenzettel (VOB/B § 15), Vordersatz [40] h."
+  },
+  {
+    "text": "Dämmung der Bodenplatte, d = ca. 10 cm.",
+    "finding": "'ca.' macht das Maß unbestimmt; Dämmstoff und Wärmeleitstufe fehlen – GEG-Nachweis nicht prüfbar.",
+    "fix": "Wärmedämmung unter Bodenplatte aus XPS, d = 100 mm, WLS 035, druckbelastbar [CS(10/Y) 300], Stöße versetzt."
+  }
+]

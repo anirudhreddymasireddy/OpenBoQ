@@ -1,0 +1,74 @@
+"""Common data model for bills of quantities (Leistungsverzeichnis, LV) and findings."""
+from __future__ import annotations
+
+from dataclasses import dataclass, field, asdict
+from typing import Optional
+
+
+@dataclass
+class Item:
+    """One BoQ line item (LV-Position)."""
+    oz: str                      # Ordnungszahl, e.g. "03.02.0010"
+    short_text: str              # Kurztext
+    long_text: str = ""          # Langtext
+    qty: Optional[float] = None  # Menge
+    unit: str = ""               # Einheit (m2, m3, St, psch, t, ...)
+    up: Optional[float] = None   # Einheitspreis (EP)
+    it: Optional[float] = None   # Gesamtbetrag (GP)
+    section: str = ""            # Titel / Los label, e.g. "03 Beton- und Stahlbetonarbeiten"
+    section_oz: str = ""         # e.g. "03"
+    provisional: bool = False    # Bedarfs-/Eventualposition (GAEB <Provis>)
+    alternative: bool = False    # Wahl-/Alternativposition (GAEB <ALNGroupNo>/<ALNSerNo>)
+    lump_sum: bool = False       # Pauschalposition (GAEB <LumpSumItem>)
+    qty_tbd: bool = False        # Menge noch festzulegen (GAEB <QtyTBD>)
+    hourly: bool = False         # Stundenlohnarbeiten (GAEB <HourIt>)
+    stlb: bool = False           # Item carries an STLB-Bau reference (standardised text)
+    raw_id: str = ""             # GAEB ID attribute, for write-back
+
+    @property
+    def text(self) -> str:
+        return f"{self.short_text}\n{self.long_text}".strip()
+
+    @property
+    def total(self) -> float:
+        """Best estimate of the item's money value."""
+        if self.it is not None:
+            return float(self.it)
+        if self.qty is not None and self.up is not None:
+            return float(self.qty) * float(self.up)
+        return 0.0
+
+
+@dataclass
+class Flag:
+    """One finding."""
+    rule_id: str                 # e.g. "R01"
+    title: str                   # short German/English label
+    severity: str                # "high" | "medium" | "low" | "info"
+    message: str                 # human explanation
+    oz: str = ""                 # affected item ("" = whole LV)
+    reference: str = ""          # legal / normative basis (VOB/B, VOB/C, DIN ...)
+    exposure_eur: float = 0.0    # estimated money at risk
+    suggestion: str = ""         # proposed fix
+    source: str = "rules"        # "rules" | "ifc" | "llm"
+    confidence: float = 1.0
+
+    def to_dict(self) -> dict:
+        return asdict(self)
+
+
+@dataclass
+class BoQ:
+    project: str = ""
+    name: str = ""
+    currency: str = "EUR"
+    phase: str = ""              # GAEB data phase: 81, 83, 84, 86 ...
+    items: list[Item] = field(default_factory=list)
+    sections: dict[str, str] = field(default_factory=dict)  # section_oz -> label
+
+    @property
+    def total(self) -> float:
+        return sum(i.total for i in self.items if not i.provisional and not i.alternative)
+
+    def by_oz(self) -> dict[str, Item]:
+        return {i.oz: i for i in self.items}
