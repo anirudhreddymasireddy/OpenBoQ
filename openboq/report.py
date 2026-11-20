@@ -36,7 +36,7 @@ def to_html(res: Result) -> str:
     for f in res.counted:
         by_type[f.title.split(":")[0]] += f.exposure_eur
     top_types = sorted(by_type.items(), key=lambda kv: -kv[1])[:8]
-    max_t = max([v for _, v in top_types] or [1])
+    max_t = max([v for _, v in top_types] or [0]) or 1   # unpriced tenders: all € values can be 0
 
     bars = "".join(
         f'<div class="bar"><span class="bl">{_e(k)}</span><span class="bt"><i style="width:{100*v/max_t:.1f}%"></i></span>'
@@ -158,10 +158,10 @@ def to_excel(res: Result, path) -> Path:
     } for f in res.flags]
     out = Path(path)
     with pd.ExcelWriter(out, engine="openpyxl") as xw:
-        pd.DataFrame(fl).to_excel(xw, "Befunde", index=False)
-        pd.DataFrame(pos).to_excel(xw, "Positionen", index=False)
+        pd.DataFrame(fl).to_excel(xw, sheet_name="Befunde", index=False)
+        pd.DataFrame(pos).to_excel(xw, sheet_name="Positionen", index=False)
         if res.ifc_table:
-            pd.DataFrame(res.ifc_table).to_excel(xw, "IFC-Abgleich", index=False)
+            pd.DataFrame(res.ifc_table).to_excel(xw, sheet_name="IFC-Abgleich", index=False)
     return out
 
 

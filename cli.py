@@ -46,7 +46,7 @@ def cmd_analyze(args):
     OUT.mkdir(exist_ok=True)
     boq = load_boq(args.file)
     res = analyze(boq, ifc=args.ifc, use_llm=args.llm)
-    stem = Path(args.file).stem
+    stem = Path(args.file).name.replace(".", "_")   # keep extension: X.pdf and X.D84 must not overwrite each other
     write_html(res, OUT / f"{stem}_report.html")
     to_excel(res, OUT / f"{stem}_report.xlsx")
     print(f"{len(boq.items)} Positionen, LV-Summe {eur(boq.total)}")
