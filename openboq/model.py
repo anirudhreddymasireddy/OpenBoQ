@@ -52,6 +52,14 @@ class Flag:
     suggestion: str = ""         # proposed fix
     source: str = "rules"        # "rules" | "ifc" | "llm"
     confidence: float = 1.0
+    en: dict = field(default_factory=dict)   # English texts: {"title", "message", "suggestion"}
+
+    def txt(self, lang: str = "de") -> tuple[str, str, str]:
+        """(title, message, suggestion) in the requested language, German as fallback."""
+        if lang == "en" and self.en:
+            return (self.en.get("title") or self.title, self.en.get("message") or self.message,
+                    self.en.get("suggestion", self.suggestion))
+        return self.title, self.message, self.suggestion
 
     def to_dict(self) -> dict:
         return asdict(self)

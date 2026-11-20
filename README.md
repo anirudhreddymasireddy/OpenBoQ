@@ -8,8 +8,9 @@ flags faulty line items and estimates change-order (Nachtrag) exposure.
 ```bash
 pip install -r requirements.txt
 python cli.py demo                 # sample LV + planted errors + IFC model -> out/report.html, out/report.xlsx
-streamlit run app.py               # dashboard: click "Demo-Daten laden" or upload a GAEB file + IFC
+streamlit run app.py               # dashboard: Deutsch/English switch in the sidebar, demo data or upload
 python cli.py analyze LV.X84 --ifc model.ifc     # sponsor files
+python cli.py analyze LV.pdf --lang en           # report + findings in English (default: German)
 python cli.py eval --runs 100      # recall / precision on planted errors
 pytest -q
 export ANTHROPIC_API_KEY=...       # optional: enables the Claude layer (--llm / toggle in the app)

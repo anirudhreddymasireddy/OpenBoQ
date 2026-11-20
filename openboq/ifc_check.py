@@ -16,7 +16,7 @@ import ifcopenshell
 import ifcopenshell.util.element as ue
 
 from . import knowledge as K
-from .fmt import de, dep
+from .fmt import de, dep, en
 from .model import BoQ, Flag
 from .units import norm_unit
 
@@ -38,6 +38,10 @@ class Mapping:
     pset: dict = field(default_factory=dict)   # {"IsExternal": True}
     lv_exclude: Optional[str] = None
     ref_eur: float = 0.0           # fallback unit price for missing items
+
+    @property
+    def name_en(self) -> str:
+        return MAPPING_EN.get(self.name, self.name)
 
 
 CONCRETE = r"(?<!poren)beton|ortbeton|stahlbeton"
@@ -63,6 +67,15 @@ MAPPINGS: list[Mapping] = [
 ]
 
 _COVERED_CLASSES = {m.ifc_class for m in MAPPINGS}
+
+MAPPING_EN = {
+    "Fundamente – Beton": "Foundations – concrete", "Bodenplatte – Beton": "Ground slab – concrete",
+    "Stahlbetonwände – Beton": "RC walls – concrete", "Stahlbetonwände – Schalung": "RC walls – formwork",
+    "Decken – Beton": "Slabs – concrete", "Decken – Schalung": "Slabs – formwork", "Stützen – Beton": "Columns – concrete",
+    "Unterzüge – Beton": "Beams – concrete", "Unterzüge – Schalung": "Beams – formwork",
+    "Mauerwerk Außenwand": "Masonry external walls", "Mauerwerk Innenwand tragend": "Masonry internal load-bearing",
+    "Mauerwerk nichttragend": "Masonry non-load-bearing", "Treppenläufe": "Stair flights",
+}
 
 
 def _qty(el, name: str) -> Optional[float]:
@@ -192,7 +205,7 @@ def check_ifc(boq: BoQ, ifc_path_or_model) -> tuple[list[Flag], list[dict]]:
                     oz=items[0].oz, reference="VOB/B § 2 Abs. 3 (Mengenabweichung > 10 %)",
                     exposure_eur=abs(model_qty - lv_qty) * up,
                     suggestion=f"Vordersatz auf {de(model_qty, 1)} {mp.unit} anpassen oder Abweichung im Modell klären.",
-                    source="ifc"))
+                    source="ifc", en=dict(title=f"Quantity deviation model ↔ BoQ: {mp.name_en}", message=f"Model: {en(model_qty, 1)} {mp.unit} ({row['elements']} elements) – BoQ: {en(lv_qty, 1)} {mp.unit} (items {ozs}). {'Extra' if dev > 0 else 'Reduced'} quantity {dev:+.1%}. Above 10 % a new unit price can be demanded.", suggestion=f"Change the quantity to {en(model_qty, 1)} {mp.unit} or resolve the deviation in the model.")))
             elif abs(dev) > WATCH:
                 status = "watch"
         elif not items and model_qty > 0:
@@ -204,16 +217,16 @@ def check_ifc(boq: BoQ, ifc_path_or_model) -> tuple[list[Flag], list[dict]]:
                 reference="VOB/B § 2 Abs. 6 (zusätzliche Leistung); VOB/B § 1 Abs. 4",
                 exposure_eur=model_qty * up,
                 suggestion=f"Position „{mp.name}“ ({mp.unit}) ergänzen, Menge {de(model_qty, 1)} {mp.unit}.",
-                source="ifc"))
+                source="ifc", en=dict(title=f"In the model but not in the BoQ: {mp.name_en}", message=f"{row['elements']} elements ({en(model_qty, 1)} {mp.unit}) in the IFC model, but no matching BoQ item. It will be built but is not tendered → additional work.", suggestion=f"Add an item '{mp.name_en}' ({mp.unit}), quantity {en(model_qty, 1)} {mp.unit}.")))
         elif items and model_qty == 0:
             status = "missing_in_model"
             flags.append(Flag(
                 "R16", f"Im LV, aber nicht im Modell: {mp.name}", "low",
                 f"LV-Positionen {ozs} ({de(lv_qty, 1)} {mp.unit}) haben kein Gegenstück im Modell – Modellstand oder Mengenansatz prüfen.",
-                oz=items[0].oz, reference="Mengenermittlung (VOB/A § 7 Abs. 1)", source="ifc"))
+                oz=items[0].oz, reference="Mengenermittlung (VOB/A § 7 Abs. 1)", source="ifc", en=dict(title=f"In the BoQ but not in the model: {mp.name_en}", message=f"BoQ items {ozs} ({en(lv_qty, 1)} {mp.unit}) have no counterpart in the model – check the model status or the quantity.")))
         if row["no_qty"]:
             flags.append(Flag("R17", f"Bauteile ohne Mengenangabe: {mp.name}", "low",
-                              f"{row['no_qty']} Bauteile ohne {mp.qto} und ohne auswertbare Geometrie.", source="ifc"))
+                              f"{row['no_qty']} Bauteile ohne {mp.qto} und ohne auswertbare Geometrie.", source="ifc", en=dict(title=f"Elements without quantities: {mp.name_en}", message=f"{row['no_qty']} elements without {mp.qto} and without usable geometry.")))
         table.append({"Prüfgruppe": mp.name, "Bauteile": row["elements"], "Modell": round(model_qty, 2),
                       "LV": round(lv_qty, 2), "Einheit": mp.unit, "Abweichung": None if dev is None else round(dev, 4),
                       "OZ": ozs, "Status": status})
@@ -225,7 +238,7 @@ def check_ifc(boq: BoQ, ifc_path_or_model) -> tuple[list[Flag], list[dict]]:
             uncovered[el.is_a()] = uncovered.get(el.is_a(), 0) + 1
     if uncovered:
         flags.append(Flag("R18", "Bauteilklassen ohne Prüfregel", "info",
-                          ", ".join(f"{k} ({v})" for k, v in sorted(uncovered.items())), source="ifc"))
+                          ", ".join(f"{k} ({v})" for k, v in sorted(uncovered.items())), source="ifc", en=dict(title="Element classes without a check rule", message=", ".join(f"{k} ({v})" for k, v in sorted(uncovered.items())))))
     return flags, table
 
 

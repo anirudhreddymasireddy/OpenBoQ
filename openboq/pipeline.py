@@ -48,7 +48,8 @@ class Result:
         return risk
 
 
-def analyze(boq: BoQ, ifc=None, use_llm: bool = False, llm_client=None, model: Optional[str] = None) -> Result:
+def analyze(boq: BoQ, ifc=None, use_llm: bool = False, llm_client=None, model: Optional[str] = None,
+            lang: str = "de") -> Result:
     t0 = time.time()
     flags = run_rules(boq)
     table: list[dict] = []
@@ -62,9 +63,9 @@ def analyze(boq: BoQ, ifc=None, use_llm: bool = False, llm_client=None, model: O
         kw = {"client": llm_client} if llm_client else {}
         if model:
             kw["model"] = model
-        flags += llm_checks.llm_item_checks(boq, known=flags, **kw)
+        flags += llm_checks.llm_item_checks(boq, known=flags, lang=lang, **kw)
         try:
-            summary = llm_checks.llm_summary(boq, flags, **kw)
+            summary = llm_checks.llm_summary(boq, flags, lang=lang, **kw)
         except Exception:
             summary = ""
     flags.sort(key=lambda f: (-SEV_RANK[f.severity], -f.exposure_eur))

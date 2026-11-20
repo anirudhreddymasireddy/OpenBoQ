@@ -147,3 +147,49 @@ REF_DISPOSAL_EUR_M3 = 28.0
 REF_SCAFFOLD_EUR_M2 = 10.0
 REF_BE_SHARE = 0.03
 REF_WATERPROOF_EUR_M2 = 35.0
+
+
+# ------------------------------------------------------------------ English labels (language toggle)
+WT_LABEL_EN = {
+    "be": "site setup", "schalung": "formwork", "betonstahl": "reinforcing steel", "sauberkeit": "blinding layer",
+    "fertigteil": "precast concrete", "beton": "in-situ / reinforced concrete", "oberboden": "topsoil removal",
+    "aushub": "excavation", "entsorgung": "soil removal / disposal", "verfuellen": "backfill",
+    "tragschicht": "frost-protection / base layer", "wasserhaltung": "dewatering", "mauerwerk": "masonry",
+    "sturz": "lintel", "abdichtung": "waterproofing", "daemmung": "insulation", "drainage": "drainage / pipework",
+    "geruest": "scaffolding",
+}
+PARAM_EN = {
+    "Stahlsorte": ("steel grade", "Steel grade (e.g. B500B) missing – price and claim risk"),
+    "Festigkeitsklasse": ("strength class", "Concrete strength class (e.g. C25/30) missing"),
+    "Expositionsklasse": ("exposure class", "Exposure class (e.g. XC1) missing – durability undefined"),
+    "Homogenbereich": ("soil zone", "Soil zone (Homogenbereich, DIN 18300) missing – ground risk allocation unclear"),
+    "Wanddicke": ("wall thickness", "Wall thickness missing"),
+    "Wassereinwirkungsklasse": ("water exposure class", "Water exposure class / standard (DIN 18533) missing"),
+    "Dämmdicke": ("insulation thickness", "Insulation thickness missing"),
+    "Wärmeleitfähigkeit": ("thermal conductivity", "Thermal conductivity class (WLS) missing – energy compliance not verifiable"),
+    "Nennweite": ("nominal diameter", "Nominal diameter (DN) missing"),
+    "Lastklasse": ("load class", "Scaffold load class missing"),
+    "Standzeit": ("standing time", "Standing time missing – rental cost open"),
+}
+VAGUE_EN = {
+    "„ca.“": "Approximate value – quantity/size not definite, billing dispute likely",
+    "„nach Erfordernis“": "Scope open ('as required') – who decides what is required?",
+    "„nach Bedarf“": "Scope open ('as needed')",
+    "„nach Wahl des AN“": "Execution left to the contractor's choice – quality risk for the client",
+    "„nach Angabe der Bauleitung“": "Work defined later by site management → changed work under VOB/B § 2(5) likely",
+    "„o. ä.“": "'or similar' – unclear equivalence; better name a reference product plus equivalence criteria",
+    "„evtl.“": "'possibly' – unclear whether the work is owed; tender it as a provisional item instead",
+    "„ggf.“": "'if applicable' – unclear whether the work is owed; tender it as a provisional item instead",
+    "„nach Aufwand“": "'at cost' – no unit-price character, cost control impossible",
+    "Komplettheitsklausel": "Completeness clause – often invalid in the client's standard terms (§ 307 BGB); gaps become claims",
+    "„wie vor“": "'as before' – refers to another item, becomes inconsistent when either changes",
+}
+OUTDATED_EN = {
+    "Bodenklassen statt Homogenbereiche": ("soil classes instead of soil zones",
+        "Since VOB/C 2016, DIN 18300 describes soil by Homogenbereiche; old soil classes are no longer a contractual basis – ground risk unclear"),
+    "DIN 18195 (zurückgezogen)": ("DIN 18195 (withdrawn)",
+        "Waterproofing has been specified under DIN 18531–18535 since 2017 (below ground: DIN 18533)"),
+    "veralteter Wärmeschutz-Normstand": ("outdated thermal-insulation standard", "Check the edition of the standard"),
+}
+MEMBER_EN = {"Fundament": "foundations", "Bodenplatte": "ground slab", "Wand": "walls", "Decke": "slabs",
+             "Stütze": "columns", "Unterzug": "beams"}

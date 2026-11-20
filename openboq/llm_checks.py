@@ -105,7 +105,7 @@ def _examples_for(chunk: list[Item], examples: list[dict], k: int = 4) -> str:
         f"- Text: {e['text']}\n  Befund: {e['finding']}\n  Besser: {e.get('fix', '')}" for e in picked)
 
 
-def _parse(resp, oz_map) -> list[Flag]:
+def _parse(resp, oz_map, lang: str = "de") -> list[Flag]:
     flags = []
     for block in resp.content:
         if getattr(block, "type", "") != "tool_use":
@@ -125,12 +125,14 @@ def _parse(resp, oz_map) -> list[Flag]:
                 source="llm",
                 confidence=float(f.get("confidence", 0.7) or 0.7),
             ))
+            if lang == "en":
+                flags[-1].en = {"title": flags[-1].title, "message": flags[-1].message, "suggestion": flags[-1].suggestion}
     return flags
 
 
 def llm_item_checks(boq: BoQ, model: str = DEFAULT_MODEL, batch: int = 20, client=None,
                     known: Optional[list[Flag]] = None, workers: int = WORKERS,
-                    examples: Optional[list[dict]] = None) -> list[Flag]:
+                    examples: Optional[list[dict]] = None, lang: str = "de") -> list[Flag]:
     """Semantic checks, batched and parallel.
 
     The system prompt + LV outline + rule findings are identical for every batch, so they sit in a
@@ -146,8 +148,10 @@ def llm_item_checks(boq: BoQ, model: str = DEFAULT_MODEL, batch: int = 20, clien
             f"- {f.oz or 'LV'}: {f.title}" for f in known if f.severity in ("high", "medium"))
     outline = "\n".join(f"{i.oz} {i.short_text} ({i.qty:g} {i.unit})" if i.qty is not None else f"{i.oz} {i.short_text}"
                         for i in items)
+    lang_note = ("\n\nWrite the fields title, message and suggestion in English (legal references may stay German)."
+                 if lang == "en" else "")
     system = [
-        {"type": "text", "text": SYSTEM},
+        {"type": "text", "text": SYSTEM + lang_note},
         {"type": "text", "text": f"Projekt: {boq.project}\nLV: {boq.name}\n\nGliederung des gesamten LV "
                                  f"(für Vollständigkeits- und Widerspruchsprüfung):\n{outline}{known_txt}",
          "cache_control": {"type": "ephemeral"}},
@@ -161,7 +165,7 @@ def llm_item_checks(boq: BoQ, model: str = DEFAULT_MODEL, batch: int = 20, clien
             tool_choice={"type": "tool", "name": "report_findings"},
             messages=[{"role": "user", "content": user}],
         )
-        return _parse(resp, oz_map)
+        return _parse(resp, oz_map, lang)
 
     if not chunks:
         return []
@@ -188,13 +192,15 @@ def llm_fix_text(item: Item, flags: list[Flag], model: str = DEFAULT_MODEL, clie
     return "".join(getattr(b, "text", "") for b in resp.content).strip()
 
 
-def llm_summary(boq: BoQ, flags: list[Flag], model: str = DEFAULT_MODEL, client=None) -> str:
+def llm_summary(boq: BoQ, flags: list[Flag], model: str = DEFAULT_MODEL, client=None, lang: str = "de") -> str:
     client = client or _client()
     top = sorted(flags, key=lambda f: -f.exposure_eur)[:15]
     lines = "\n".join(f"- [{f.severity}] {f.oz or 'LV'} {f.title}: {f.exposure_eur:,.0f} € – {f.message[:160]}" for f in top)
     resp = client.messages.create(
         model=model, max_tokens=700,
-        system="Schreibe eine prägnante Management-Zusammenfassung (max. 120 Wörter, Deutsch) für Projektleitung/Kalkulation.",
+        system=("Write a concise management summary (max. 120 words, English) for project management / estimating."
+                if lang == "en" else
+                "Schreibe eine prägnante Management-Zusammenfassung (max. 120 Wörter, Deutsch) für Projektleitung/Kalkulation."),
         messages=[{"role": "user", "content": f"Projekt {boq.project}, LV-Summe {boq.total:,.0f} €.\nTop-Befunde:\n{lines}"}],
     )
     return "".join(getattr(b, "text", "") for b in resp.content).strip()
