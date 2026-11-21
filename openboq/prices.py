@@ -120,6 +120,11 @@ class Suggestion:
     examples: list[dict]
 
 
+import threading as _threading
+_LOADED: dict = {}
+_LOAD_LOCK = _threading.Lock()
+
+
 class PriceModel:
     def __init__(self, rows: list[dict]):
         from sklearn.feature_extraction.text import TfidfVectorizer
@@ -132,8 +137,15 @@ class PriceModel:
 
     @classmethod
     def load(cls, path: Path = DB_PATH) -> "PriceModel | None":
-        rows = load_db(path)
-        return cls(rows) if rows else None
+        """Built once per file version and kept in memory: the text index takes a while, the model never changes."""
+        p = Path(path)
+        key = (str(p.resolve()), *((p.stat().st_mtime_ns, p.stat().st_size) if p.exists() else (0, 0)))
+        with _LOAD_LOCK:
+            if key not in _LOADED:
+                rows = load_db(path)
+                _LOADED.clear()
+                _LOADED[key] = cls(rows) if rows else None
+            return _LOADED[key]
 
     def project_of(self, source: str, items: list[Item] | None = None) -> str:
         """Project id of a file: known from the DB, or the DB project sharing most item texts with it."""

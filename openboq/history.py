@@ -171,6 +171,9 @@ class HistInfo:
     examples: list[dict] = field(default_factory=list)
 
 
+_LOADED: dict = {}
+
+
 class HistoryModel:
     def __init__(self, rows: list[dict], example: bool = False):
         self.rows = rows
@@ -187,7 +190,12 @@ class HistoryModel:
         p = Path(path) if path else HISTORY_PATH
         if not p.exists():
             return None
-        return cls(read_history(p), example=p.name == EXAMPLE_PATH.name)
+        key = (str(p.resolve()), p.stat().st_mtime_ns, p.stat().st_size)
+        if key not in _LOADED:                     # same file, same version -> reuse the index (it never changes)
+            if len(_LOADED) > 8:
+                _LOADED.clear()
+            _LOADED[key] = cls(read_history(p), example=p.name == EXAMPLE_PATH.name)
+        return _LOADED[key]
 
     def _stats(self, pool: list[dict], basis: str, label: str) -> HistInfo | None:
         if len(pool) < MIN_N:

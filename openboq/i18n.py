@@ -25,7 +25,7 @@ UI = {
     "cat_error": ("Fehler", "Error"), "cat_risk": ("Risiko", "Risk"), "cat_opportunity": ("Chance", "Opportunity"),
     "cat_security": ("Sicherheit", "Security"),
     "tab_questions": ("Bieterfragen", "Bidder questions"),
-    "dl_questions": ("⬇️ Bieterfragen (Text)", "⬇️ Bidder questions (text)"),
+    "dl_questions": ("Bieterfragen (Text)", "Bidder questions (text)"),
     "demo_box": ("Demo / Testmodus", "Demo / test mode"),
     # review / learning
     "tab_review": ("Prüfen & Lernen", "Review & learn"),
@@ -93,7 +93,7 @@ UI = {
     "login_failed": ("Benutzername oder Passwort falsch.", "Wrong username or password."),
     "logged_in_as": ("Angemeldet als", "Signed in as"),
     "logout": ("Abmelden", "Sign out"),
-    "finish": ("✅ Rest bestätigen & Bieterfragen erstellen", "✅ Confirm the rest & create bidder questions"),
+    "finish": ("Rest bestätigen & Bieterfragen erstellen", "Confirm the rest & create bidder questions"),
     "finished": ("verworfen · bestätigt", "dismissed · confirmed"),
     "memory_stats": ("Gedächtnis", "Memory"),
     "q_confirmed_only": ("Nur bestätigte Befunde", "Confirmed findings only"),
@@ -165,8 +165,8 @@ UI = {
     "pos_detail": ("Position im Detail", "Item details"),
     "fix_btn": ("✍️ Korrigierten Langtext vorschlagen (KI)", "✍️ Suggest corrected long text (AI)"),
     "fixing": ("Formuliere …", "Writing …"),
-    "dl_html": ("⬇️ Bericht (HTML)", "⬇️ Report (HTML)"),
-    "dl_xlsx": ("⬇️ Befunde (Excel)", "⬇️ Findings (Excel)"),
+    "dl_html": ("Bericht (HTML)", "Report (HTML)"),
+    "dl_xlsx": ("Befunde (Excel)", "Findings (Excel)"),
     "sheet_findings": ("Befunde", "Findings"),
     "sheet_items": ("Positionen", "Items"),
     # cli

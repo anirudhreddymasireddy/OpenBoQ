@@ -119,7 +119,8 @@ openboq/
   feedback.py         review & learn, team findings            userrules.py   team rules
   prices.py           learned unit prices                      report.py   HTML + Excel
   pipeline.py         analyze(boq, use_llm, …)
-  ui_history.py, ui_whatif.py   the two dashboard tabs
+  ui_history.py, ui_whatif.py   the two dashboard tabs      ui_theme.py   wordmark (SVG), styles
+.streamlit/config.toml  theme: colours, system fonts (no downloads)
 tools/                scorer, layout test, history test generator, generators/
 tests/                pytest
 ```

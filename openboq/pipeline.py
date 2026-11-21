@@ -119,6 +119,9 @@ def _merge_ai_duplicates(flags):
     return out
 
 
+_MERGED: dict = {}                               # (price model, history) -> merged model, built once
+
+
 def analyze(boq: BoQ, use_llm: bool = False, llm_client=None, model: Optional[str] = None,
             lang: str = "de", prices="auto", source: str = "", feedback="auto", rules="auto",
             meta: dict | None = None, history="auto") -> Result:
@@ -139,7 +142,11 @@ def analyze(boq: BoQ, use_llm: bool = False, llm_client=None, model: Optional[st
     if history is not None and not history.example and prices is not None:
         from .history import price_rows
         from .prices import PriceModel
-        prices = PriceModel(prices.rows + price_rows(history))   # own past unit prices also feed the price suggestions
+        mk = (id(prices), id(history))
+        if mk not in _MERGED:                     # own past unit prices also feed the price suggestions
+            _MERGED.clear()
+            _MERGED[mk] = (prices, history, PriceModel(prices.rows + price_rows(history)))
+        prices = _MERGED[mk][2]
     if prices is not None:
         from .prices import check_learned_prices
         f_p, sugg = check_learned_prices(boq, prices, source or boq.name)

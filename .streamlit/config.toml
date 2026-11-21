@@ -1,0 +1,32 @@
+# Look of the app. Safe to commit – keys live in secrets.toml (git-ignored) or the hosting's Secrets settings.
+[theme]
+base = "light"
+primaryColor = "#C9561A"
+backgroundColor = "#F6F7F9"
+secondaryBackgroundColor = "#E9EDF1"
+textColor = "#15202B"
+linkColor = "#C9561A"
+borderColor = "#D9DFE6"
+# system fonts: nothing to download, renders at once
+font = "system-ui, -apple-system, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif"
+headingFont = "system-ui, -apple-system, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif"
+headingFontWeights = [650, 600, 600]
+headingFontSizes = ["2.1rem", "1.45rem", "1.2rem"]
+baseRadius = "0.4rem"
+showWidgetBorder = true
+dataframeHeaderBackgroundColor = "#EEF1F4"
+chartCategoricalColors = ["#C9561A", "#2A6FC9", "#5F6B78", "#8A5300", "#1F7A5C"]
+
+[theme.sidebar]
+backgroundColor = "#15202B"
+secondaryBackgroundColor = "#223140"
+textColor = "#DCE3EA"
+borderColor = "#2E3E4F"
+primaryColor = "#E8772E"
+linkColor = "#F0A060"
+
+[client]
+toolbarMode = "minimal"
+
+[browser]
+gatherUsageStats = false

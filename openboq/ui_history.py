@@ -27,6 +27,7 @@ def _set_source(path: str | None):
     st.rerun()
 
 
+@st.fragment   # controls rerun only this tab; a new data source still reruns the whole page (st.rerun)
 def history_tab(res, boq, lang: str, eur):
     de = lang == "de"
     L = (lambda a, b: a if de else b)
@@ -66,8 +67,8 @@ def history_tab(res, boq, lang: str, eur):
             if not H.EXAMPLE_PATH.exists():
                 H.make_example(_example_source())
             _set_source(str(H.EXAMPLE_PATH))
-        c3.download_button(L("Vorlage herunterladen", "Download template"), H.template_csv(),
-                           file_name="openboq_history_template.csv", width="stretch")
+        c3.download_button(L("Vorlage herunterladen", "Download template"), H.template_csv,
+                           file_name="openboq_history_template.csv", width="stretch", on_click="ignore")
         if model is not None and not model.example and st.session_state.get("history_path") \
                 and st.session_state["history_path"] != str(H.HISTORY_PATH):
             if st.button(L("Als Standard für alle Prüfungen speichern", "Save as default for all checks")):
@@ -102,7 +103,7 @@ def history_tab(res, boq, lang: str, eur):
         up, _ = unit_price(it, res.price_suggestions)
         if h and h.qty_ratio and up and it.qty:
             qty_eff += (h.qty_ratio - 1) * it.qty * up
-    m1, m2, m3, m4 = st.columns(4)
+    m1, m2, m3, m4 = st.container(key="kpis_hist").columns(4)
     m1.metric(L("Positionen mit Erfahrungswerten", "Items with experience data"), f"{matched} / {len(boq.items)}")
     m2.metric(L("Erwartetes Nachtragsvolumen", "Expected change-order volume"), eur(co_exp),
               help=L("Σ Positionswert × Nachtragsquote × typische Nachtragshöhe vergleichbarer Positionen",
@@ -147,8 +148,9 @@ def history_tab(res, boq, lang: str, eur):
     if only:
         df = df[(df["n"].notna()) | (df[L("+ Befunde", "+ findings")] != "")]
     st.dataframe(df, hide_index=True, width="stretch", height=420)
-    st.download_button(L("Zuschlagstabelle (CSV)", "Markup table (CSV)"), df.to_csv(index=False, sep=";").encode("utf-8-sig"),
-                       file_name="openboq_markups.csv")
+    st.download_button(L("Zuschlagstabelle (CSV)", "Markup table (CSV)"),
+                       lambda d=df: d.to_csv(index=False, sep=";").encode("utf-8-sig"),
+                       file_name="openboq_markups.csv", icon=":material/download:", on_click="ignore")
     st.caption(L(
         "Zuschlag = Basiszuschlag + Historie (Kostenunterdeckung je Einheit vergleichbarer Positionen; bei Pauschalen die "
         "Mengenüberschreitung; bei typischen Mindermengen die nicht mehr gedeckten Gemeinkosten) + Befunde (Risiko-Befunde dieser Position in € / Positionswert, max. 15 %). "

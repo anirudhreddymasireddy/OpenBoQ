@@ -21,6 +21,7 @@ PRESETS = {   # name (de, en) -> driver changes
 }
 
 
+@st.fragment   # sliders rerun only this tab, not the whole page
 def whatif_tab(res, boq, lang: str, eur):
     de = lang == "de"
     L = (lambda a, b: a if de else b)
@@ -61,7 +62,7 @@ def whatif_tab(res, boq, lang: str, eur):
                      "früheren Projekten verwendet.",
                      f"{r.suggested} of {r.priced} items have no own price – the comparable price from past projects is used."))
 
-    m1, m2, m3, m4 = st.columns(4)
+    m1, m2, m3, m4 = st.container(key="kpis_wi").columns(4)
     m1.metric(L("Angebotssumme (LV-Preise)", "Bid total (BoQ prices)"), eur(r.base_total))
     m2.metric(L("Mehrkosten durch Preise", "Extra cost from prices"), eur(r.material),
               f"{'+' if r.material >= 0 else ''}{num(100 * r.material / r.base_total, 1, lang)} %" if r.base_total else None,
@@ -88,21 +89,21 @@ def whatif_tab(res, boq, lang: str, eur):
                      f"Margin {eur(margin * r.base_total)} → after scenario {eur(left)} "
                      f"({num(100 * left / r.base_total, 1, lang)} % instead of {num(100 * margin, 0, lang)} %)."))
 
-    # ---- by driver + sensitivity
-    a, b = st.columns(2)
+    # ---- by driver + sensitivity (plain HTML bars: full labels, exact values, nothing extra to load)
+    from .ui_theme import bar_list
+    name = lambda k: W.DRIVERS[k][0] if de else W.DRIVERS[k][1]
+    a, b = st.columns(2, gap="large")
     with a:
         st.markdown("**" + L("Wirkung je Preistreiber", "Effect per cost driver") + "**")
-        bd = pd.DataFrame([{L("Preistreiber", "Driver"): (W.DRIVERS[k][0] if de else W.DRIVERS[k][1]), "€": round(v, 0)}
-                           for k, v in r.by_driver.items() if abs(v) >= 1])
-        if len(bd):
-            st.bar_chart(bd, x=L("Preistreiber", "Driver"), y="€", horizontal=True, color="#2a78d6", height=260)
+        bd = sorted(((name(k), v) for k, v in r.by_driver.items() if abs(v) >= 1), key=lambda kv: -abs(kv[1]))
+        if bd:
+            st.markdown(bar_list(bd, eur, signed=True), unsafe_allow_html=True)
         else:
             st.caption(L("Keine Preisänderung gewählt.", "No price change selected."))
     with b:
         st.markdown("**" + L("Empfindlichkeit: +10 % je Preistreiber", "Sensitivity: +10 % per driver") + "**")
-        sens = pd.DataFrame([{L("Preistreiber", "Driver"): (W.DRIVERS[k][0] if de else W.DRIVERS[k][1]), "€": round(v, 0)}
-                             for k, v in W.sensitivity(boq, sugg) if abs(v) >= 1])
-        st.bar_chart(sens, x=L("Preistreiber", "Driver"), y="€", horizontal=True, color="#2a78d6", height=260)
+        sens = sorted(((name(k), v) for k, v in W.sensitivity(boq, sugg) if abs(v) >= 1), key=lambda kv: -abs(kv[1]))
+        st.markdown(bar_list(sens, eur, signed=True), unsafe_allow_html=True)
         st.caption(L("Welche Preisentwicklung dieses Angebot am stärksten trifft.",
                      "Which price movement hits this bid hardest."))
 
@@ -155,12 +156,15 @@ def whatif_tab(res, boq, lang: str, eur):
                      "Shares of the unit price, typical values from civil-works calculations. The rest (plant, overheads, "
                      "profit) does not move in the scenario."))
 
-    buf = io.BytesIO()
-    with pd.ExcelWriter(buf, engine="openpyxl") as xw:
-        pd.DataFrame([{L("Preistreiber", "Driver"): (W.DRIVERS[k][0] if de else W.DRIVERS[k][1]),
-                       L("Änderung", "Change"): f"{100 * changes[k]:+.0f} %", "Δ €": round(r.by_driver[k], 2)}
-                      for k in W.DRIVERS]).to_excel(xw, sheet_name=L("Szenario", "Scenario"), index=False)
-        pd.DataFrame(r.items).drop(columns=["shares"]).to_excel(xw, sheet_name=L("Positionen", "Items"), index=False)
-        if alts:
-            pd.DataFrame(alts).to_excel(xw, sheet_name=L("Alternativen", "Alternatives"), index=False)
-    st.download_button(L("Szenario als Excel", "Scenario as Excel"), buf.getvalue(), file_name="openboq_whatif.xlsx")
+    def _xlsx(changes=dict(changes), r=r, alts=alts) -> bytes:      # built only when the button is clicked
+        buf = io.BytesIO()
+        with pd.ExcelWriter(buf, engine="openpyxl") as xw:
+            pd.DataFrame([{L("Preistreiber", "Driver"): (W.DRIVERS[k][0] if de else W.DRIVERS[k][1]),
+                           L("Änderung", "Change"): f"{100 * changes[k]:+.0f} %", "Δ €": round(r.by_driver[k], 2)}
+                          for k in W.DRIVERS]).to_excel(xw, sheet_name=L("Szenario", "Scenario"), index=False)
+            pd.DataFrame(r.items).drop(columns=["shares"]).to_excel(xw, sheet_name=L("Positionen", "Items"), index=False)
+            if alts:
+                pd.DataFrame(alts).to_excel(xw, sheet_name=L("Alternativen", "Alternatives"), index=False)
+        return buf.getvalue()
+    st.download_button(L("Szenario als Excel", "Scenario as Excel"), _xlsx, file_name="openboq_whatif.xlsx",
+                       icon=":material/download:", on_click="ignore")
