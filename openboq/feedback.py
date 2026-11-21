@@ -45,6 +45,12 @@ CREATE TABLE IF NOT EXISTS decisions (
   outcome TEXT, outcome_at TEXT
 );
 CREATE INDEX IF NOT EXISTS ix_fp ON decisions(fingerprint);
+CREATE TABLE IF NOT EXISTS manual (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  item_oz TEXT, item_text TEXT, item_long TEXT, item_unit TEXT, trade TEXT,
+  title TEXT, category TEXT, severity TEXT, note TEXT,
+  project TEXT, client TEXT, reviewer TEXT, created_at TEXT, active INTEGER DEFAULT 1
+);
 CREATE INDEX IF NOT EXISTS ix_rule ON decisions(rule_id);
 """
 
@@ -90,6 +96,28 @@ class FeedbackStore:
              decision, reason, reviewer, _dt.datetime.now().isoformat(timespec="seconds")))
         self.con.commit()
         return cur.lastrowid
+
+    def add_manual(self, item, boq: BoQ, title: str, category: str, severity: str, note: str = "",
+                   reviewer: str = "", meta: dict | None = None) -> int:
+        """A finding the reviewer added by hand (the system missed it). Remembered for the same and similar items."""
+        meta = meta or {}
+        cur = self.con.execute(
+            """INSERT INTO manual (item_oz, item_text, item_long, item_unit, trade, title, category, severity, note,
+               project, client, reviewer, created_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+            (item.oz if item else "", item.short_text if item else "", (item.long_text if item else "")[:2000],
+             item.unit if item else "", (item.section if item else "") or "", title.strip(), category, severity, note.strip(),
+             meta.get("project", boq.project or boq.name), meta.get("client", boq.client), reviewer,
+             _dt.datetime.now().isoformat(timespec="seconds")))
+        self.con.commit()
+        return cur.lastrowid
+
+    def manual_all(self, active_only: bool = True) -> list[sqlite3.Row]:
+        q = "SELECT * FROM manual" + (" WHERE active=1" if active_only else "") + " ORDER BY id"
+        return self.con.execute(q).fetchall()
+
+    def set_manual_active(self, manual_id: int, active: bool) -> None:
+        self.con.execute("UPDATE manual SET active=? WHERE id=?", (int(active), manual_id))
+        self.con.commit()
 
     def set_outcome(self, decision_id: int, outcome: str) -> None:
         assert outcome in ("dispute", "clarified", "no_issue")
@@ -141,6 +169,61 @@ class FeedbackStore:
 
 
 # ---------------------------------------------------------------------- learning
+TEAM_SIM = 0.6          # similarity (short + long text) for "similar to a team finding"
+
+
+def apply_manual(flags: list[Flag], boq: BoQ, store: FeedbackStore | None) -> list[Flag]:
+    """Team findings come back automatically: on the SAME item text (any project, any file name) as the same finding,
+    on SIMILAR items one level lower as a suggestion that names the item it resembles. BoQ-wide team findings
+    (no item) are not repeated automatically – they belong to one project."""
+    if store is None:
+        return flags
+    manual = [m for m in store.manual_all() if m["item_text"]]
+    if not manual or not boq.items:
+        return flags
+    sev_rank = {"high": 3, "medium": 2, "low": 1, "info": 0}
+
+    def make(rule, it, m, sev, how_de, how_en):
+        f = Flag(rule, m["title"], sev,
+                 f"{m['note'] or m['title']} – {how_de} (Team-Befund von {m['reviewer'] or '–'}, {m['created_at'][:10]}, "
+                 f"Projekt {m['project'] or '–'}).",
+                 oz=it.oz, reference="Team-Wissen", source="team",
+                 suggestion="Wie beim früheren Befund prüfen bzw. als Bieterfrage klären.",
+                 en=dict(title=m["title"],
+                         message=f"{m['note'] or m['title']} – {how_en} (team finding by {m['reviewer'] or '–'}, "
+                                 f"{m['created_at'][:10]}, project {m['project'] or '–'}).",
+                         suggestion="Check as in the earlier finding or clarify with a bidder question."))
+        f.category = m["category"] or "risk"
+        f.question = {"de": f"Pos. {it.oz}: {m['title']}" + (f" – {m['note']}" if m["note"] else "") + ". Bitte klären Sie dies vor Angebotsabgabe.",
+                      "en": f"Item {it.oz}: {m['title']}" + (f" – {m['note']}" if m["note"] else "") + ". Please clarify before bid submission."}
+        return f
+
+    key = lambda t, l, u: (_norm(t), _norm(l)[:300], _norm(u))
+    exact = {key(m["item_text"], m["item_long"], m["item_unit"]): m for m in manual}
+    covered = set()
+    for it in boq.items:
+        m = exact.get(key(it.short_text, it.long_text, it.unit))
+        if m is not None:
+            flags.append(make("M01", it, m, m["severity"], "gleiche Position wurde früher vom Team markiert",
+                              "the same item was flagged by the team before"))
+            covered.add(it.oz)
+    rest = [it for it in boq.items if it.oz not in covered and len(it.text) >= 8]
+    if rest:
+        from .embeddings import top_k
+        corpus = [f"{m['item_text']} {m['item_long']}" for m in manual]
+        for it, row in zip(rest, top_k([it.text for it in rest], corpus, k=1)):
+            if not row:
+                continue
+            idx, sim = row[0]
+            m = manual[idx]
+            if sim >= TEAM_SIM and _norm(it.unit) == _norm(m["item_unit"]):
+                sev = {3: "medium", 2: "low", 1: "low", 0: "info"}[sev_rank.get(m["severity"], 1)]
+                flags.append(make("M02", it, m, sev,
+                                  f"ähnlich zu früher markierter Position „{m['item_text'][:60]}“ ({sim:.0%} Ähnlichkeit)",
+                                  f"similar to an item flagged before: '{m['item_text'][:60]}' ({sim:.0%} similar)"))
+    return flags
+
+
 def apply_learning(flags: list[Flag], boq: BoQ, store: FeedbackStore | None) -> list[Flag]:
     """Pre-fill decisions from memory and calibrate severities. Mutates and returns flags."""
     if store is None:

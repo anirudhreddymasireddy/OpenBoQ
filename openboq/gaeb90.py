@@ -70,12 +70,20 @@ def parse_gaeb90(path) -> BoQ:
     long_buf: list[str] = []
     preamble: list[str] = []
 
+    note: list[str] | None = None            # "20" record: a note (Hinweistext) between items, until the next item
+    note_ref = ""
+
     def flush():
-        nonlocal cur, long_buf
+        nonlocal cur, long_buf, note
         if cur is not None:
             cur.long_text = re.sub(r"[ \t]+", " ", "\n".join(l.strip() for l in long_buf)).strip()
             boq.items.append(cur)
         cur, long_buf = None, []
+        if note is not None:
+            txt = "\n".join(x.strip() for x in note if x.strip() and x.strip() != "@@").strip()
+            if len(txt.split()) >= 3:
+                boq.notes.append({"ref": note_ref, "text": re.sub(r"[ \t]+", " ", txt)})
+            note = None
 
     for l in lines:
         rt = l[:2]
@@ -131,12 +139,26 @@ def parse_gaeb90(path) -> BoQ:
                 cur.up, cur.it = int(nums[0]) / 100, int(nums[1]) / 100
                 if cur.up == 0 and cur.it == 0:
                     cur.up = cur.it = None
+        elif rt == "20":                          # Hinweistext / Vorbemerkung block
+            last = cur.oz if cur is not None else (boq.items[-1].oz if boq.items else "")
+            flush()
+            note, note_ref = [], (f"Hinweis nach Pos. {last}" if last else "Vorbemerkungen")
+        elif rt == "26" and note is not None:
+            note.append(body)
+        elif rt == "32":                          # printed section total
+            nums = re.findall(r"\d+", l[11:40])
+            sec = _split_oz(l[2:11], mask).strip(".")
+            if nums and len(nums[0]) >= 12 and sec:
+                boq.totals.setdefault("sections", {}).setdefault(sec, int(nums[0][:12]) / 100)
         elif rt == "25" and cur is not None:
             cur.short_text = (cur.short_text + " " + body.strip()).strip()
         elif rt == "26" and cur is not None:
             long_buf.append(body)
         elif rt in ("31", "99"):
             flush()
+            m = re.match(r"99(\d{12})\s+(\d{2})(\d{14})", l) if rt == "99" else None
+            if m:                                 # end record: net total, VAT rate, gross total
+                boq.totals.update(net=int(m.group(1)) / 100, vat_rate=int(m.group(2)) / 100, gross=int(m.group(3)) / 100)
     flush()
     if any(preamble):
         boq.notes.append({"ref": "Vorbemerkungen", "text": "\n".join(preamble).strip()})

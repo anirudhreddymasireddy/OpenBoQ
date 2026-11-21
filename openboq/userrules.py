@@ -77,7 +77,7 @@ def parse_simple(text: str) -> dict:
 
 def parse_with_claude(text: str, client=None, model: str | None = None) -> dict:
     """Claude turns the sentence into the same structure (used when ANTHROPIC_API_KEY is set)."""
-    from .llm_checks import DEFAULT_MODEL, _client
+    from .llm_checks import _client, default_model
     client = client or _client()
     tool = {"name": "make_rule", "description": "Structured review rule for a BoQ checker.",
             "input_schema": {"type": "object", "properties": {
@@ -88,7 +88,7 @@ def parse_with_claude(text: str, client=None, model: str | None = None) -> dict:
                 "severity": {"type": ["string", "null"], "enum": ["high", "medium", "low", None]},
                 "pct": {"type": ["number", "null"]}}, "required": ["action", "families"]}}
     resp = client.messages.create(
-        model=model or DEFAULT_MODEL, max_tokens=500, tools=[tool], tool_choice={"type": "tool", "name": "make_rule"},
+        model=model or default_model(), max_tokens=500, tools=[tool], tool_choice={"type": "tool", "name": "make_rule"},
         system="Convert the user's sentence into a review rule. Families: " + ", ".join(
             f"{k} ({FAMILY_LABEL[k][1]})" for k in FAMILIES) + ". Only use scope fields the sentence mentions.",
         messages=[{"role": "user", "content": text}])
@@ -100,7 +100,8 @@ def parse_with_claude(text: str, client=None, model: str | None = None) -> dict:
 
 
 def parse(text: str, client=None) -> tuple[dict, str]:
-    if client is not None or os.environ.get("ANTHROPIC_API_KEY"):
+    from .llm_checks import available
+    if client is not None or available():
         try:
             return parse_with_claude(text, client=client), "claude"
         except Exception:

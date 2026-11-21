@@ -10,3 +10,19 @@ data/price_db.json
 data/feedback.db
 data/users.json
 data/rules.json
+data/llm_cache/
+data/history.csv
+data/history_upload_*
+data/history_example.csv
+
+# secrets – never in the repository (hosting: Streamlit "Secrets" settings)
+.env.*
+*.env
+.streamlit/secrets.toml
+# test data and generated datasets (kept local)
+synthetic*/
+lv_test_dataset/
+histtest/
+*_dataset/
+/*.pdf
+/*.tsv

@@ -36,26 +36,34 @@ WORK_TYPES: list[WorkType] = [
              price={"m2": (5, 18), "m3": (110, 220)}, norm="DIN 18331"),
     WorkType("fertigteil", "Betonfertigteil", r"fertigteil",
              ("count", "area", "length", "volume"), norm="DIN 18331"),
-    WorkType("beton", "Ortbeton / Stahlbeton", r"beton|stahlbeton",
+    # "Straßenablauf / Bordstein / Schacht aus Beton" are products, not cast-in-place concrete
+    WorkType("beton", "Ortbeton / Stahlbeton",
+             r"^(?!.*(?:ablauf|schacht|bordstein|rinne|pflaster|rohr|aufsatz|kappe|fertigteil|gehwegplatte|betonplatten|stein\b)).*beton",
              ("volume", "count"),
              params=[("Festigkeitsklasse", r"c\s?\d{1,2}\s?/\s?\d{2}", "Betonfestigkeitsklasse (z. B. C25/30) fehlt"),
                      ("Expositionsklasse", r"\bx(0|c[1-4]|d[1-3]|s[1-3]|f[1-4]|a[1-3]|m[1-3])\b", "Expositionsklasse (z. B. XC1) fehlt – Dauerhaftigkeit unbestimmt")],
              price={"m3": (140, 480)}, norm="DIN 18331"),
     WorkType("oberboden", "Oberboden abtragen", r"oberboden|mutterboden",
              ("area", "volume"),
-             params=[("Homogenbereich", r"homogenbereich", "Homogenbereich nach DIN 18300/18320 fehlt")],
+             # DIN 18300: Oberboden is always its own Homogenbereich – the word itself identifies it
+             params=[],
              price={"m2": (2, 9), "m3": (5, 30)}, norm="DIN 18300"),
-    WorkType("aushub", "Aushub / Bodenabtrag", r"aushub|ausheben|baugrube|bodenabtrag|graben\s+(?:herstellen|ausheben)",
+    WorkType("aushub", "Aushub / Bodenabtrag", r"^(?!.*pumpensumpf).*(?:aushub|ausheben|aushebung|baugrube|bodenabtrag|graben\s+(?:herstellen|ausheben))",
              ("volume", "length"),
              params=[("Homogenbereich", r"homogenbereich", "Homogenbereich nach DIN 18300 fehlt – Baugrundrisiko liegt unklar verteilt")],
              price={"m3": (6, 35)}, norm="DIN 18300"),
-    WorkType("entsorgung", "Entsorgung / Abfuhr", r"entsorg|abfahren|abfuhr|abtransport|deponie",
+    # "Ver-/Entsorgungsleitung" is a utility line, "Entsorgungseinrichtung" site sanitation – not disposal
+    WorkType("entsorgung", "Entsorgung / Abfuhr",
+             r"^(?!.*(?:ver-?\s?/\s?entsorg|entsorgungs(?:ltg|leitung|einr|anschl|container)|sanitär)).*"
+             r"(?:entsorg|abfahren|abfuhr|abtransport|deponie)",
              ("volume", "mass", "count", "area", "length"), price={"m3": (12, 70), "t": (8, 60)}, norm="DIN 18300"),
     WorkType("verfuellen", "Verfüllung", r"verf[üu]ll",
              ("volume",), price={"m3": (12, 55)}, norm="DIN 18300"),
+    WorkType("planum", "Planum herstellen", r"^(?!.*(?:prüf|kontroll|mess|nachweis|platte)).*\bplanum",
+             ("area",), price={"m2": (0.8, 8)}, norm="DIN 18300"),
     WorkType("tragschicht", "Frostschutz- / Tragschicht", r"frostschutz|schotter|tragschicht",
-             ("volume", "area", "length"), price={"m3": (25, 75), "m2": (5, 25)}, norm="DIN 18300"),
-    WorkType("wasserhaltung", "Wasserhaltung", r"wasserhaltung|pumpe",
+             ("volume", "area", "length", "mass"), price={"m3": (25, 75), "m2": (5, 25), "t": (10, 45)}, norm="DIN 18300"),
+    WorkType("wasserhaltung", "Wasserhaltung", r"wasserhaltung|pumpe|sumpf",
              ("time", "lump", "count"), measurable=False, norm="DIN 18305"),
     WorkType("mauerwerk", "Mauerwerk", r"mauerwerk|mauern|kalksandstein|porenbeton|ziegel",
              ("area", "volume"),
@@ -63,7 +71,8 @@ WORK_TYPES: list[WorkType] = [
              price={"m2": (30, 140), "m3": (180, 520)}, norm="DIN 18330"),
     WorkType("sturz", "Sturz", r"sturz|st[üu]rze",
              ("count", "length"), price={"St": (25, 250), "m": (20, 160)}, norm="DIN 18330"),
-    WorkType("abdichtung", "Abdichtung", r"abdichtung|sperrbahn|dickbeschichtung",
+    # a waterstop ("Fugenband … Abdichtung Arbeitsfuge") is a joint product, not a membrane to DIN 18533
+    WorkType("abdichtung", "Abdichtung", r"^(?!.*(?:fugenband|fugenblech|injektionsschlauch)).*(?:abdichtung|sperrbahn|dickbeschichtung)",
              ("area", "length"),
              params=[("Wassereinwirkungsklasse", r"w\s?\d(\.\d)?\s?-\s?e|din\s?18533|din\s?18531|din\s?18532|din\s?18534|din\s?18535|mauersperrbahn|querschnitt",
                       "Wassereinwirkungsklasse / Norm (DIN 18533) fehlt")],
@@ -73,7 +82,13 @@ WORK_TYPES: list[WorkType] = [
              params=[("Dämmdicke", r"d\s?=\s?\d|\d{2,3}\s?mm", "Dämmdicke fehlt"),
                      ("Wärmeleitfähigkeit", r"wls|wlg|λ|lambda|0[,.]0\d{2}", "Wärmeleitstufe (WLS) fehlt – GEG-Nachweis gefährdet")],
              price={"m2": (15, 90)}, norm="DIN 18336"),
-    WorkType("drainage", "Drainage / Rohrleitung", r"drän|drain|rohr(?!graben)|\bdn\s?\d",
+    # pipes are measured in m (fittings in St) – never m3; bedding / trench / gravel words stay with drainage
+    WorkType("rohr", "Rohrleitung", r"^(?!.*(?:drän|drain|kies|sand|schotter|bettung|auflager|leitungszone|verfüll|graben|aushub|halter|festpunkt|"
+                                     r"prüf|füllen|spül|markier|kennzeich|kalibr|inbetrieb|befestig|abhäng|konsol|schelle|dämm))"
+                                     r".*(?:rohr|\bpipe\b|\bdn\s?\d)",
+             ("length", "count"), params=[("Nennweite", r"dn\s?\d+|ø\s?\d+|\d+\s?mm|\bda?\s?\d{2,4}\b|\b\d{2,4}\s?[x×/]\s?\d", "Nennweite (DN) fehlt")],
+             price={"m": (12, 250)}, norm="DIN 18307 / DIN 18306"),
+    WorkType("drainage", "Drainage / Rohrleitung", r"^(?!.*(?:pfosten|rahmen|halter|rohrbogen\s+f[üu]r\s+gel)).*(?:drän|drain|rohr(?!graben)|\bdn\s?\d)",
              ("length", "count", "mass", "volume"), params=[("Nennweite", r"dn\s?\d+", "Nennweite (DN) fehlt")],
              price={"m": (12, 120)}, norm="DIN 18308"),
     WorkType("geruest", "Gerüst", r"ger[üu]st",
@@ -87,10 +102,31 @@ WORK_TYPES: list[WorkType] = [
 # Match order matters: specific types before generic ones ("Porenbeton-Mauerwerk" is masonry,
 # "Schalung Stahlbetonwand" is formwork, "Aushub entsorgen" is disposal).
 _ORDER = ["be", "schalung", "betonstahl", "sauberkeit", "fertigteil", "abdichtung", "daemmung", "sturz",
-          "mauerwerk", "geruest", "entsorgung", "oberboden", "aushub", "drainage", "beton", "verfuellen", "tragschicht", "wasserhaltung"]
+          "mauerwerk", "geruest", "entsorgung", "oberboden", "aushub", "planum", "rohr", "drainage", "beton", "verfuellen", "tragschicht", "wasserhaltung"]
 WORK_TYPES.sort(key=lambda w: _ORDER.index(w.key) if w.key in _ORDER else 99)
 WORK_TYPES.insert(0, WorkType("strasse", "Straßenbau / Asphalt", r"asphalt|bitum|mineralbeton|pflaster|bordstein|tragdeckschicht",
                                ("volume", "area", "length", "mass", "count"), measurable=True, norm="DIN 18317/18318"))
+# per-metre work: one floor for "m" cannot tell marking tape (0,20 €/m) from a fence (20 €/m), so each gets its range
+_PER_METRE = [
+    # the marking word must name the work, not an included extra ("Rohr verlegen inkl. Warnband" is a pipe)
+    WorkType("markierung", "Markierung / Warnband", r"^(?:(?!inkl|einschl|\(|mit\s).)*?(?:warnband|trassenband|trassenwarnband|"
+             r"ortungsdraht|ortungsband|markier|warning tape)", ("length", "count", "area", "lump"), price={"m": (0.05, 4)}, norm="DIN 18322"),
+    WorkType("zaun", "Zaun", r"^(?!.*baustelleneinrichtung).*(?:zaun|\bfence)", ("length", "count", "lump", "length_time"),
+             price={"m": (3, 90)}, norm="DIN 18320"),
+    WorkType("bord", "Bordstein / Einfassung", r"bordstein|tiefbord|hochbord|rundbord|randstein|einfassungsstein|rasenkante|"
+             r"\bkerb", ("length", "count"), price={"m": (12, 120)}, norm="DIN 18318"),
+    WorkType("rinne", "Rinne", r"rinne(?!n?graben)|rinnenstein|\bchannel drain|\bgutter", ("length", "count"),
+             price={"m": (15, 400)}, norm="DIN 18318 / DIN 18339"),
+    WorkType("kabelgraben", "Kabel- / Leitungsgraben",
+             r"^(?!.*(?:planum|verbau|sohle|wasserhaltung|aushebung)).*(?:kabelgraben|leitungsgraben|cable trench)", ("length", "volume"),
+             params=[("Homogenbereich", r"homogenbereich|bodenklasse|bk\s?\d", "Homogenbereich nach DIN 18300 fehlt")],
+             price={"m": (10, 180)}, norm="DIN 18300"),
+    WorkType("gelaender", "Geländer / Handlauf",
+             r"^(?!.*(?:lackier|anstrich|beschicht|streich|reinig)).*(?:geländer|gelaender|handlauf|absturzsicherung|\brailing)",
+             ("length", "count"), price={"m": (40, 700)}, norm="DIN 18360"),
+]
+for _w in reversed(_PER_METRE):
+    WORK_TYPES.insert(0, _w)
 WT_BY_KEY = {w.key: w for w in WORK_TYPES}
 
 
@@ -99,8 +135,10 @@ def classify(short_text: str, long_text: str = "") -> WorkType | None:
     ("wie vor", "Leistung wie Position …") – long texts mention too many neighbouring trades."""
     st = short_text.strip().lower()
     texts = [st]
-    if len(st) < 12 or re.match(r"(wie\s+vor|w\.\s?v\.|leistung\s+wie\s+pos)", st):
+    if re.match(r"(wie\s+vor|w\.\s?v\.|leistung\s+wie\s+pos)", st):
         texts = [f"{short_text} {long_text}".lower()]
+    elif len(st) < 12:      # a very short text ("Pumpensumpf") decides when it matches; otherwise the long text helps
+        texts = [st, f"{short_text} {long_text}".lower()]
     for t in texts:
         for wt in WORK_TYPES:
             if re.search(wt.match, t):
@@ -163,7 +201,7 @@ WT_LABEL_EN = {
     "fertigteil": "precast concrete", "beton": "in-situ / reinforced concrete", "oberboden": "topsoil removal",
     "aushub": "excavation", "entsorgung": "soil removal / disposal", "verfuellen": "backfill",
     "tragschicht": "frost-protection / base layer", "wasserhaltung": "dewatering", "mauerwerk": "masonry",
-    "sturz": "lintel", "abdichtung": "waterproofing", "daemmung": "insulation", "drainage": "drainage / pipework",
+    "sturz": "lintel", "abdichtung": "waterproofing", "daemmung": "insulation", "drainage": "drainage / pipework", "rohr": "pipework", "planum": "subgrade formation", "markierung": "marking / warning tape", "zaun": "fence", "bord": "kerb / edging", "rinne": "channel / gutter", "kabelgraben": "cable / utility trench", "gelaender": "railing / handrail",
     "geruest": "scaffolding",
 }
 PARAM_EN = {
@@ -256,13 +294,13 @@ CLAUSES = [
      "The scope is fixed later by the client. Without a pricing basis, payment disputes are likely.",
      "Wie oft bzw. in welchem Umfang ist mit Anordnungen zu rechnen, und wird jede Anordnung nach Einheitspreis vergütet?",
      "How often or to what extent are orders expected, and is each order paid at the unit price?"),
-    ("liability", r"vertragsstrafe|pönale|verkehrssicherungspflicht|haftet\s+(?:\w+\s+){0,3}(?:uneingeschränkt|für\s+alle|allein)"
+    ("liability", r"verkehrssicherungspflicht|haftet\s+(?:\w+\s+){0,3}(?:uneingeschränkt|für\s+alle|allein)"
                   r"|gewährleistung(?:sfrist)?\s+(?:von\s+)?(?:\d{1,2}|zehn|fünf)\s+jahre", 0.05,
      "Haftung / Vertragsstrafe", "Liability / contract penalty",
-     "Erhöhtes Haftungs- oder Strafrisiko; Höhe und Deckelung prüfen (Vertragsstrafe i. d. R. max. 5 % der Auftragssumme).",
-     "Increased liability or penalty risk; check amount and cap (contract penalties are usually capped at 5% of the contract sum).",
-     "Bitte nennen Sie Höhe und Obergrenze der Vertragsstrafe bzw. den Umfang der übertragenen Haftung.",
-     "Please state the amount and cap of the contract penalty or the extent of the transferred liability."),
+     "Erhöhtes Haftungsrisiko; Umfang und Begrenzung prüfen.",
+     "Increased liability risk; check scope and limits.",
+     "Bitte nennen Sie den Umfang der übertragenen Haftung und eine Haftungsobergrenze.",
+     "Please state the extent of the transferred liability and a liability cap."),
     ("ground_risk", r"baugrundrisiko|bodenverhältnisse\s+(?:\w+\s+){0,3}(?:eigenverantwortlich|vom\s+an\s+zu\s+prüfen)"
                     r"|mehraushub[^.]{0,80}(?:nicht\s+gesondert|einzurechnen)", 0.10,
      "Baugrundrisiko beim AN", "Ground risk on the contractor",
@@ -272,11 +310,28 @@ CLAUSES = [
      "Is excavation beyond the standard width (e.g. for manholes, slopes) paid by measurement?"),
 ]
 
+# contract penalties (VOB/B § 11, §§ 339 ff. BGB). In standard terms courts accept roughly 0.2–0.3 % of the
+# contract sum per working day and 5 % in total (BGH VII ZR 210/01); a penalty tied to a vague deadline is non-transparent.
+PENALTY = (r"vertragsstrafe|konventionalstrafe|pönale|\bstrafe\b|strafzahlung|bußgeld"
+           r"|(\d[\d.,]*)\s*(?:€|eur(?:o)?)\s*(?:je|pro)\s*(?:kalender|werk|arbeits)?tag")
+PENALTY_AMOUNT = r"(\d[\d.,]*)\s*(?:€|eur(?:o)?)\s*(?:je|pro)\s*(?:(kalender|werk|arbeits)?tag|woche)"
+PENALTY_PCT = r"(\d+(?:,\d+)?)\s*%\s*(?:der\s+)?(?:auftrags|netto|angebots|abrechnungs)?summe[^.]{0,40}(?:je|pro)\s*(?:kalender|werk|arbeits)?tag"
+VAGUE_DEADLINE = r"so\s+früh\s+wie\s+möglich|so\s+schnell\s+wie\s+möglich|schnellstmöglich|unverzüglich|nach\s+(?:belieben|ermessen)\s+des\s+(?:ag|auftraggebers)|jederzeit\s+auf\s+abruf"
+PENALTY_CAP = r"(?:höchstens|maximal|max\.|insgesamt\s+(?:jedoch\s+)?(?:nicht\s+mehr\s+als|höchstens)|begrenzt\s+auf|obergrenze)[^.]{0,40}\d"
+
 PUBLIC_CLIENT = r"\bgemeinde\b|\bstadt\b|landkreis|ldkr|\bmarkt\s|freistaat|bundesrepublik|staatliches\s+bauamt|zweckverband|landesamt|\bvhb\b|vob/a|vergabestelle|öffentliche\s+ausschreibung"
 
 # hidden instructions aimed at AI tools (prompt injection) and invisible characters
 INJECTION = (r"ignore\s+(?:all\s+|any\s+)?(?:previous|prior|above)\s+instructions|disregard\s+(?:all\s+)?(?:previous|prior)"
              r"|ignoriere\s+(?:alle\s+)?(?:vorherigen|bisherigen|obigen)\s+(?:anweisungen|regeln)|system\s*prompt"
              r"|you\s+are\s+(?:now\s+)?(?:an?\s+)?(?:ai|assistant|language\s+model|chatgpt|claude)|als\s+(?:ki|sprachmodell)\s+(?:sollst|musst)"
-             r"|(?:rate|bewerte|classify|markiere)\s+(?:this|dieses|das)\s+(?:bid|offer|angebot|lv|item|position)\s+(?:as|als)")
+             r"|(?:rate|bewerte|classify|markiere)\s+(?:this|dieses|das)\s+(?:bid|offer|angebot|lv|item|position)\s+(?:as|als)"
+             # wording varies: "SYSTEM NOTE FOR AI REVIEWER", "ignore all anomalies", "mark … as 100 % compliant"
+             r"|(?:note|hinweis|instruction|anweisung|message|nachricht)\s+(?:for|to|an|für)\s+(?:the\s+|die\s+|den\s+)?"
+             r"(?:ai|ki|llm|model|modell|automated|automatische)\b"
+             r"|\b(?:ai|llm)[\s-]+(?:reviewer|review|checker|auditor)\b|\bki[\s-]+(?:prüfung|prüfer|prüfsystem|system)\b"
+             r"|ignore\s+(?:all\s+|any\s+)?(?:anomal\w*|errors?|issues?|findings?|warnings?|deviations?)"
+             r"|ignoriere\s+(?:alle\s+)?(?:fehler|auffälligkeiten|abweichungen|hinweise|befunde|anomalien)"
+             r"|(?:mark|markiere|rate|bewerte|report|melde)\s+(?:\w+\s+){0,3}(?:as|als)\s+(?:\d+\s?%\s+)?"
+             r"(?:compliant|konform|fehlerfrei|mängelfrei|risk[\s-]?free|risikofrei|error[\s-]?free|unauffällig|ok)\b")
 INVISIBLE = r"[\u200b-\u200f\u202a-\u202e\u2060-\u2064\ufeff\u00ad]"

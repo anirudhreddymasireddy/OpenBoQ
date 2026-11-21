@@ -22,9 +22,18 @@ def _hash(password: str, salt: str) -> str:
 
 def load_users(path: Path = USERS_PATH) -> dict:
     try:
-        return json.loads(Path(path).read_text(encoding="utf-8"))
+        users = json.loads(Path(path).read_text(encoding="utf-8"))
     except Exception:
-        return {}
+        users = {}
+    # hosted demo: logins from the platform's secret settings, never from the repository
+    #   NR_APP_USERS = "anirudh:secret-1; jury:secret-2"
+    for pair in (os.environ.get("NR_APP_USERS") or "").split(";"):
+        if ":" in pair:
+            name, pw = (x.strip() for x in pair.split(":", 1))
+            if name and pw:
+                salt = hashlib.sha256(name.lower().encode()).hexdigest()[:32]
+                users.setdefault(name.lower(), {"name": name, "salt": salt, "hash": _hash(pw, salt)})
+    return users
 
 
 def add_user(username: str, password: str, display_name: str = "", path: Path = USERS_PATH) -> None:
@@ -51,5 +60,15 @@ def autologin(path: Path = USERS_PATH) -> dict | None:
     return {"username": name, "name": u.get("name") or name} if u else None
 
 
+def name_only() -> bool:
+    """NR_LOGIN=name: anyone enters with just a name (no password) – the name signs their review decisions."""
+    return (os.environ.get("NR_LOGIN") or "").strip().lower() == "name"
+
+
+def name_login(name: str) -> dict | None:
+    n = " ".join((name or "").split())[:60]
+    return {"username": n.lower(), "name": n} if n else None
+
+
 def enabled(path: Path = USERS_PATH) -> bool:
-    return bool(load_users(path))
+    return name_only() or bool(load_users(path))

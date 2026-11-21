@@ -8,7 +8,7 @@ flags faulty line items and estimates change-order (Nachtrag) exposure.
 ```bash
 pip install -r requirements.txt
 python cli.py demo                 # sample LV + planted errors + IFC model -> out/report.html, out/report.xlsx
-streamlit run app.py               # dashboard: Deutsch/English switch in the sidebar, demo data or upload
+streamlit run app.py               # dashboard: DE/EN, demo data or upload – several files at once (PDF, Word, GAEB, Excel mixed)
 python cli.py analyze LV.X84 --ifc model.ifc     # sponsor files
 python cli.py analyze LV.pdf --lang en           # report + findings in English (default: German)
 python cli.py batch dataset --lang en   # analyse all files in one go (~40 s for the 43 dataset files)
@@ -17,6 +17,75 @@ python cli.py eval --runs 100      # recall / precision on planted errors
 pytest -q
 export ANTHROPIC_API_KEY=...       # optional: enables the Claude layer (--llm / toggle in the app)
 ```
+
+## What it covers (all five challenge milestones)
+
+| Milestone | In OpenBoQ |
+| --- | --- |
+| 1 Parsing | GAEB XML / GAEB 90, PDF prints, Excel/CSV/TSV, Word, text – any layout; AI reader only on weak parses, values must appear verbatim |
+| 2 Error detection | 35 rules (arithmetic, units, prices, texts, typos, item numbers, totals, missing companion work) + AI judgement |
+| 3 Risk & change orders | € exposure per finding; contract clauses weighted public/private; quantity cross-checks without a model; bidder questions |
+| 4 Historical data | tab "History & markups": planned vs actual quantities/costs and change orders of past projects → R32–R34, markup and unit-price suggestion |
+| 5 What-if | tab "What-if": 9 cost drivers, escalation clause, margin impact, quantities as in past projects, alternatives |
+
+Test it yourself: `python tools/make_history_test.py histtest` then `python tools/score_synthetic.py histtest`
+(any folder with BoQ files + `expected.json` can be scored the same way).
+
+## Free hosting (Streamlit Community Cloud)
+
+1. Push this repository to GitHub (public).
+2. On [share.streamlit.io](https://share.streamlit.io) → "Create app" → pick the repo, branch `main`, file `app.py`,
+   Python 3.12 (Advanced settings).
+3. In the app's **Settings → Secrets** paste (TOML) – keys never go into the repository:
+
+```toml
+GROQ_API_KEY = "gsk_..."              # free key from console.groq.com
+NVIDIA_API_KEY = "nvapi-..."          # optional backup
+NR_LLM_CHAIN = "groq,nvidia"
+NR_LOGIN = "name"                     # visitors enter just their name (signs their review decisions)
+# or, with passwords instead: NR_APP_USERS = "team:choose-a-password; jury:another-password"
+```
+
+With `NR_LOGIN = "name"` anyone with the link gets in by typing a name; without either setting there is no login
+screen at all. Either way, visitors can use your free AI quota.
+The rules work without any key; the AI toggle appears once a key is set. Do not upload confidential client BoQs
+to a public demo.
+
+## AI providers (open models, no Claude credits needed)
+
+Set one or more keys; OpenBoQ uses them in order and **switches to the next provider automatically** when one is rate
+limited (`openboq/providers.py`). Batches are sized to each provider's free-tier limits.
+
+| Provider | Key variable | Default model | Cost / limits (checked 21 Nov 2026) |
+|---|---|---|---|
+| **NVIDIA build** (recommended start) | `NVIDIA_API_KEY` | `mistralai/mistral-large-4-1t-a52b` (alternatives: `z-ai/glm-5.3-flash`, `google/gemma-4-31b-it`) | free, ~40 req/min, dev/evaluation use, US |
+| Groq | `GROQ_API_KEY` | `openai/gpt-oss-120b` | free but only 8K tokens/min, 1K req/day → small batches |
+| OVHcloud AI Endpoints (EU) | `OVH_AI_ENDPOINTS_ACCESS_TOKEN` | `gpt-oss-120b` | ~£0.07/£0.34 per 1M tokens; 2 req/min without key |
+| Scaleway (EU, Paris) | `SCW_SECRET_KEY` | `gpt-oss-120b` | 1M tokens free, then ~€0.15/€0.60 per 1M |
+| DeepInfra | `DEEPINFRA_API_KEY` | `Qwen/Qwen3-235B-A22B-Instruct-2507` | ~$0.09/$0.55 per 1M |
+| OpenRouter | `OPENROUTER_API_KEY` | `openrouter/free` | 50 free req/day (1,000 with $10 credit) |
+| Mistral (EU) | `MISTRAL_API_KEY` | `mistral-small-latest` | free plan unclear, may train on prompts |
+| Gemini | `GEMINI_API_KEY` | `gemini-flash-latest` | free tier gave 429s for us |
+| Local Ollama | – (`NR_LLM_CHAIN=ollama`) | `gemma4:12b` | free, slow without GPU; set `OLLAMA_CONTEXT_LENGTH=16384` |
+| Claude | `ANTHROPIC_API_KEY` | `claude-sonnet-5-5` | used instead of the chain when set |
+
+```powershell
+$env:NVIDIA_API_KEY = "nvapi-..."         # free key from build.nvidia.com
+$env:GROQ_API_KEY   = "gsk_..."           # optional second provider
+$env:NR_LLM_CHAIN   = "nvidia,groq"       # optional order; default = every provider with a key
+$env:NVIDIA_MODEL   = "openai/gpt-oss-120b"   # optional per provider: <NAME>_MODEL
+python cli.py providers                   # tests each provider and lists its models
+```
+
+**Response cache** (`NR_LLM_CACHE`): `on` (default) stores every AI answer in `data/llm_cache/` – the same document never
+costs a second call. Before the demo run each demo file once, then use `replay`: nothing is sent, results come from the
+cache, so a dead Wi-Fi or a 429 cannot break the live demo.
+
+Model choice (research 21 Nov 2026): `gpt-oss-120b` is hosted almost everywhere and reliable with JSON; quality options are
+DeepSeek V4.1 Flash (MIT, very strong, use a non-Chinese host) and Mistral Large 4 (EU). German-specific models
+(EuroLLM, Teuken) trail clearly. Use low reasoning effort for checks, none for extraction. Fine-tuning (Unsloth) is not worth
+it this weekend: no labelled German BoQ dataset exists; few-shot examples (`data/examples.json`) + rules do more.
+**Don't send confidential client BoQs to free tiers that may train on prompts.**
 
 ## AI stack (decided)
 
@@ -42,17 +111,30 @@ Each batch gets only its 20 items plus the 1–4 most similar examples from `dat
 **Replace those 6 seed examples with the organisers' real faulty items as soon as you have them** – that's the cheapest
 way to make the AI think like their estimators, no fine-tuning needed.
 
-## Input formats (checked on the Challenge A dataset: 43 files, ~3,800 items)
+## Input formats (Challenge A dataset: 44 files, ~4,150 items read)
 
-| Format | Reader | Check against GAEB version of the same LV |
+| Format | Reader | Check |
 |---|---|---|
 | GAEB DA XML (.X81–.X86, v3.1–3.3) | `gaeb_parser.py` | – |
-| GAEB 90 fixed-width (.D83/.D84/.D86, incl. price-only bids) | `gaeb90.py` | .D83 = .X83: 159/159 items, same quantities |
-| PDF (AVA print-outs, tenders, bids; fast pypdfium2 engine with automatic pdfplumber fallback) | `pdf_parser.py` | bid 274/274 (quantities + prices 100 %), tender 242/249, print-out 48/50 |
+| GAEB 90 fixed-width (.D83/.D84/.D86, incl. price-only bids) | `gaeb90.py` | .D83 = .X83: 159/159 items |
+| PDF, Word (.docx), text – **any layout** | `smart_reader.py` picks the best of three readers | see below |
 | Excel / CSV | `gaeb_parser.parse_table` | – |
 
-Known gaps: `LV_14a/b/c` PDFs (different layout, 0 items yet); rule thresholds still produce many false positives
-on real data (units, mandatory parameters) → tune `knowledge.py` next.
+**Documents with unknown layout** (`smart_reader.py`):
+1. *AVA print reader* (`pdf_parser.py`) – fast and exact on GAEB-style prints (bid 274/274, quantities and prices 100 %).
+2. *Layout-independent reader* (`generic_reader.py`) – ruled tables (header mapped by meaning: Pos/Menge/EP/GP,
+   Item/Qty/Rate/Amount …), free text ("Menge: … EP: …"), one sentence per item ("… à 3,40 €/m = …"),
+   German or English number format (detected per document). Calculation errors are never "repaired".
+3. *AI reader* (only when 1 and 2 look weak and an AI provider is set): the model returns the items as JSON;
+   **every number must literally appear in the document**, otherwise it is dropped (no invented prices).
+
+Each result gets a quality score (items, texts, qty × EP = GP, printed totals, coverage of item numbers on the page);
+the best one wins and the dashboard shows which reader was used.
+
+Layout test (`python tools/layout_test.py <file>`): the errored bid re-typeset as Word table, reordered columns,
+English format, free text and sentences, each also as PDF → **262/262 items identical in all 10 files, all 6 planted
+errors found in every layout**. On the dataset the work also fixed real reader losses (`LV_00` 175 → 264 items,
+`LV_14a/b/c` 0 → 36/60/14 items, `Abgabe LV` +2 items).
 
 ## Who it is for: the bidder (contractor)
 
@@ -76,6 +158,34 @@ Dataset run (43 files, 3,800 items): high/medium findings went from ~40,000 (fir
   projects, only ~2 % of items find a comparable item and the error estimate is too unstable to mean anything. The mechanism needs a
   contractor's own bid archive to be useful.
 The old fixed reference ranges remain as a *low* hint only.
+
+## Batch check in the dashboard
+
+Upload several BoQ files at once (any mix of PDF, Word, GAEB XML/90, Excel/CSV) and optionally IFC models (matched to
+BoQ files by file name; a single model is used for all). The dashboard shows one row per file – format, reader used,
+items, BoQ total, high/medium findings, risk €, printed-totals check, IFC, AI status; unreadable files are listed with
+their error instead of stopping the batch. Pick a file to open it in the normal detail view (review, bidder questions …),
+or download all findings and bidder questions of all files as one Excel workbook.
+
+**Same project in several files** (`crossfile.py`): files are grouped by their item numbers and quantities – not by name –
+so a tender X83, a bid D84 and a bid PDF of the same job are recognised as one project. You get an extra row
+"🔗 Project n" that combines them (texts from the text file, prices from the price file, preliminary notes/clauses from all,
+printed totals from whichever has them) and lists every **difference between the versions** as a finding: items missing
+in one file (deleted/added), changed quantity, unit price, total, unit or short text. Test: original bid D84 vs. the
+errored PDF → exactly the 12 deleted items 4.1.210–4.1.320 and the changed price at 4.1.110, plus the cut short texts.
+Price-only files (GAEB D84) no longer get "missing description" AI findings on every item – the AI checks their notes only.
+
+Matching is by **content only**: item numbers, quantities and – where both files have texts – short texts. Renamed copies
+with identical content are detected and checked once; files with similar names but different content stay separate; an
+extract (trade package) of a larger BoQ is recognised as such, so its "missing" items are not reported.
+
+**Project notes** (app, HTML report, Excel): concrete observations that need more than one file, each naming the files and
+item numbers it rests on – e.g. "12 items are missing in errors.pdf (€18,751): 4.1.210 …", "unit price €0.50 ≠ €10.00 (4.1.110)",
+"penalty clause only in errors.pdf", "4 contract clauses only in the D84 notes", "the total printed on errors.pdf equals the
+items of the D84, not its own items". Computed by code from the documents – no AI needed, nothing inferred.
+
+**Clean batch export:** a project's findings appear once (combined row); member files add only what is specific to them;
+identical copies are skipped (on the test: 240 → 100 rows, nothing lost).
 
 ## Human in the loop: review and learning
 
@@ -107,6 +217,23 @@ German/English phrasings.
 question* or 🟢 *no issue*. The € weight of a new finding is re-scaled (×0.25 … ×2 by warning rate) from what became of past findings on **similar work** – matched by
 short + long text (≥ 2 similar items, same finding type preferred; BGE-M3 if enabled, otherwise TF-IDF). Without similar items it falls back
 to the finding type (check ID, from 3 outcomes). A table shows which findings really cost money.
+
+## Team findings and the client-side reviewer
+
+**Add your own finding** (tab *Review & learn*): pick an item, write the finding, choose type and severity. OpenBoQ stores it
+(`data/feedback.db`, table `manual`) and from then on reports it for the **same item text in any file or project** (rule M01,
+same severity) and **suggests it for similar items** (M02, one level lower, naming the item it resembles; TF-IDF/BGE-M3 ≥ 0.6
+and same unit). Team findings also become few-shot examples for the AI. They can be switched off in the "Team findings" list.
+
+**Client reviewer (devil's advocate)** – one extra AI request when the AI is on (`NR_CHALLENGE=off` disables it): the
+client's side tries to rebut the 12 strongest findings and answers per finding *holds / contestable / rebutted*, with its
+likely argument. "Contestable" and "rebutted" count only with evidence that really appears in the document – an item
+number or a verbatim quote, checked by code; arguments resting on things outside the documents (rounding, annexes,
+later billing, discounts) are treated as "holds" (first real run: the model called everything "weak" with such guesses).
+Contract clauses (R20) are never lowered by the client side. Judgment calls are adjusted (contestable: one level lower; rebutted: info); facts –
+calculation errors, totals, number formats, version differences, missing/cut texts, cent prices, team findings – keep
+their severity. The reviewer is an internal second check (like 2FA) – it is not shown in the app, HTML or Excel; it only
+lowers a judgment call when the document itself backs the counter-argument.
 
 ## What it does – three layers
 

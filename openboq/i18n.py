@@ -134,6 +134,7 @@ UI = {
     "src_ifc": ("IFC", "IFC"),
     "src_llm": ("KI", "AI"),
     "src_prices": ("Preisdaten", "Price data"),
+    "src_history": ("Projekthistorie", "Project history"),
     "c_sugg": ("Vergleichs-EP (Median)", "Comparable unit price (median)"),
     "c_sugg_n": ("Vergleiche", "Matches"),
     "sugg_line": ("Vergleichspreise früherer Projekte", "Comparable past prices"),
@@ -145,7 +146,7 @@ UI = {
     "demo_seed": ("Demo: Zufallsfehler (Seed)", "Demo: random errors (seed)"),
     "demo_seed_help": ("Pflanzt bekannte Fehler in ein sauberes LV.", "Plants known errors into a clean BoQ."),
     "ai_toggle": ("KI-Tiefenprüfung (Claude)", "AI deep check (Claude)"),
-    "ai_needs_key": ("Benötigt ANTHROPIC_API_KEY", "Requires ANTHROPIC_API_KEY"),
+    "ai_needs_key": ("Benötigt ANTHROPIC_API_KEY oder OPENROUTER_API_KEY", "Requires ANTHROPIC_API_KEY or OPENROUTER_API_KEY"),
     "ai_help": ("Semantische Prüfung + Management-Summary", "Semantic checks + management summary"),
     "intro": ("**Jede Position bekommt ein Nachtragsrisiko in Euro.**\n\n"
               "1. **Regelprüfung** – Rechenfehler, Einheiten, Pauschalen, Doppelpositionen, Preisausreißer, unklare Texte, "
@@ -253,7 +254,7 @@ RULE_NAMES = {
     "R15": ("Im Modell, nicht im LV", "In model, not in BoQ"), "R16": ("Im LV, nicht im Modell", "In BoQ, not in model"),
     "R20": ("Vertragsrisiko-Klausel", "Contract risk clause"), "R21": ("Wert nicht lesbar", "Unreadable value"),
     "R22": ("Unplausibles Format/Einheit", "Implausible format/unit"), "R23": ("Währung", "Currency"),
-    "R24": ("Preis vs. frühere Projekte", "Price vs. past projects"), "R25": ("Cent-Preis", "Cent price"),
+    "R24": ("Preis vs. frühere Projekte", "Price vs. past projects"), "R25": ("Cent-Preis", "Cent price"), "R31": ("Preis vs. gleiche Positionen", "Price vs. identical items"), "R32": ("Mengen aus Erfahrung", "Quantities from experience"), "R33": ("Nachtragsträchtig (Historie)", "Change-order-prone (history)"), "R34": ("Kosten unterschätzt (Historie)", "Costs underestimated (history)"), "R35": ("Mengen passen nicht zueinander", "Quantities do not fit together"),
     "S01": ("Versteckte KI-Anweisung", "Hidden AI instruction"), "S02": ("Unsichtbare Zeichen", "Invisible characters"),
 }
 

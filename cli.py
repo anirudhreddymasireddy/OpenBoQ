@@ -52,7 +52,15 @@ def cmd_analyze(args):
     OUT.mkdir(exist_ok=True)
     boq = load_boq(args.file)
     L = args.lang
+    if args.llm:
+        from openboq import llm_checks
+        from openboq.providers import describe
+        print("AI:", describe() if llm_checks.provider() == "chain" else llm_checks.provider_label())
+        llm_checks.PROGRESS = lambda d, n, who, sec: print(
+            f"  AI {d}/{n}  {who}  {sec:.0f} s" if d else f"  AI: {who}, {n} requests", flush=True)
     res = analyze(boq, ifc=args.ifc, use_llm=args.llm, lang=L, source=Path(args.file).name)
+    for e in res.llm_errors:
+        print("  ! AI batch skipped:", e)
     stem = Path(args.file).name.replace(".", "_")   # keep extension: X.pdf and X.D84 must not overwrite each other
     write_html(res, OUT / f"{stem}_report.html", L)
     to_excel(res, OUT / f"{stem}_report.xlsx", L)
@@ -74,19 +82,27 @@ def cmd_adduser(args):
 
 
 def cmd_batch(args):
-    """Analyse every BoQ file in a folder in one process (much faster than one call per file)."""
+    """Analyse every BoQ file in a folder in one process; writes one report per file and an overview (batch_summary.xlsx)."""
     import glob
     import time
+    import pandas as pd
     OUT.mkdir(exist_ok=True)
     L = args.lang
-    files = sorted({f for ext in ("pdf", "x8?", "X8?", "d8?", "D8?", "xlsx", "csv")
+    files = sorted({f for ext in ("pdf", "docx", "x8?", "X8?", "d8?", "D8?", "xlsx", "csv")
                     for f in glob.glob(str(Path(args.folder) / "**" / f"*.{ext}"), recursive=True)})
+    if args.only:
+        files = [f for f in files if any(k.lower() in Path(f).name.lower() for k in args.only.split(","))]
+    if args.llm:
+        from openboq import llm_checks
+        from openboq.providers import describe
+        print("AI:", describe() if llm_checks.provider() == "chain" else llm_checks.provider_label())
     t0 = time.time()
     rows = []
-    for f in files:
+    for k, f in enumerate(files, 1):
+        t1 = time.time()
         try:
             boq = load_boq(f)
-            res = analyze(boq, lang=L, source=Path(f).name)
+            res = analyze(boq, lang=L, source=Path(f).name, use_llm=args.llm)
         except Exception as e:                     # one broken file must not stop the batch
             print(f"  ! {Path(f).name}: {e}")
             continue
@@ -97,15 +113,32 @@ def cmd_batch(args):
         except Exception as e:
             print(f"  ! {Path(f).name}: report not written ({e})")
         sev = res.by_severity()
-        rows.append((Path(f).name, len(boq.items), sev["high"], sev["medium"]))
-        print(f"{Path(f).name[:48]:48s} {len(boq.items):5d} {T('items', L)} | high {sev['high']:3d} | medium {sev['medium']:3d}")
-    print(f"{len(rows)} files, {sum(r[1] for r in rows)} items in {time.time() - t0:.0f} s -> {OUT}")
+        cats = {}
+        for fl in res.counted:
+            cats[fl.category] = cats.get(fl.category, 0) + 1
+        top = res.counted[0].txt(L)[0] if res.counted else ""
+        rows.append({"file": Path(f).name, "reader": (boq.parse_info or {}).get("reader", "gaeb"), "items": len(boq.items),
+                     "total €": round(boq.total, 2), "high": sev["high"], "medium": sev["medium"], "low": sev["low"],
+                     "errors": cats.get("error", 0), "risks": cats.get("risk", 0), "opportunities": cats.get("opportunity", 0),
+                     "exposure €": round(res.exposure, 0), "AI": "yes" if args.llm and not res.llm_errors else
+                     ("failed" if args.llm else "no"), "top finding": top, "seconds": round(time.time() - t1, 1)})
+        ai = f" | AI {'!' if res.llm_errors else 'ok'}" if args.llm else ""
+        print(f"[{k:2d}/{len(files)}] {Path(f).name[:44]:44s} {len(boq.items):5d} {T('items', L)} | "
+              f"high {sev['high']:3d} | medium {sev['medium']:3d}{ai} | {time.time() - t1:.1f} s", flush=True)
+    if rows:
+        df = pd.DataFrame(rows).sort_values(["high", "exposure €"], ascending=False)
+        try:
+            df.to_excel(OUT / "batch_summary.xlsx", index=False, sheet_name="Overview")
+        except Exception as e:
+            print(f"  ! overview not written ({e})")
+    print(f"{len(rows)} files, {sum(r['items'] for r in rows)} items in {time.time() - t0:.0f} s -> {OUT}"
+          f"  (overview: {OUT / 'batch_summary.xlsx'})")
 
 
 def cmd_learn(args):
     import glob
     from openboq.prices import build_db, evaluate_leave_one_out, save_db
-    files = [f for ext in ("pdf", "x8?", "X8?", "d8?", "D8?", "xlsx", "csv")
+    files = [f for ext in ("pdf", "docx", "x8?", "X8?", "d8?", "D8?", "xlsx", "csv")
              for f in glob.glob(str(Path(args.folder) / "**" / f"*.{ext}"), recursive=True)]
     rows = build_db(sorted(set(files)))
     path = save_db(rows)
@@ -126,6 +159,20 @@ def cmd_eval(args):
         print(f"  {k:24s} {v['found']:4d}/{v['planted']:4d}  {v['recall']:.0%}")
 
 
+def cmd_providers(args):
+    """Which open-model APIs are configured, do they answer, which models do they offer."""
+    from openboq import providers as P
+    print("chain:", P.describe(), "| cache:", P.cache_mode())
+    if not P.chain():
+        print("No provider key set. Free start: $env:NVIDIA_API_KEY = 'nvapi-...'  (https://build.nvidia.com)")
+        return
+    for r in P.check():
+        state = f"OK in {r['seconds']} s" if r["ok"] else f"FAILED – {r['error']}"
+        print(f"\n{r['provider']:10} model {r['model']}: {state}")
+        if r["models"]:
+            print("  models:", ", ".join(r["models"]))
+
+
 def main():
     p = argparse.ArgumentParser(description="OpenBoQ – LV-Prüfung")
     sub = p.add_subparsers(dest="cmd", required=True)
@@ -138,9 +185,13 @@ def main():
     au = sub.add_parser("adduser", help="create or update a dashboard login")
     au.add_argument("username"); au.add_argument("name", nargs="?", default=""); au.set_defaults(fn=cmd_adduser)
     bt = sub.add_parser("batch", help="analyse all BoQ files in a folder")
-    bt.add_argument("folder"); bt.add_argument("--lang", choices=["de", "en"], default="de"); bt.set_defaults(fn=cmd_batch)
+    bt.add_argument("folder"); bt.add_argument("--lang", choices=["de", "en"], default="de")
+    bt.add_argument("--llm", action="store_true", help="also run the AI layer (uses provider quota!)")
+    bt.add_argument("--only", default="", help="comma-separated parts of file names, e.g. 'AN24,LV_00'")
+    bt.set_defaults(fn=cmd_batch)
     lr = sub.add_parser("learn", help="learn unit prices from priced BoQs in a folder")
     lr.add_argument("folder"); lr.set_defaults(fn=cmd_learn)
+    pv = sub.add_parser("providers", help="test the configured AI providers"); pv.set_defaults(fn=cmd_providers)
     e = sub.add_parser("eval"); e.add_argument("--runs", type=int, default=50); e.add_argument("--errors", type=int, default=10)
     e.set_defaults(fn=cmd_eval)
     args = p.parse_args()

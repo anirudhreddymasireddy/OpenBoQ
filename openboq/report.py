@@ -136,6 +136,8 @@ table.t{{width:100%;border-collapse:collapse;font-size:13.5px}}.t th{{text-align
 <div class="kpi"><div class="v">{len(qs)}</div><div class="l">{T("k_questions", lang)}</div></div>
 </div>
 {summary}
+{_notes_html(res, lang)}
+{_plan_html(res, lang)}
 <section><h2>{T("top", lang)} <small>{T("by_eur", lang)}</small></h2><table class="t"><tbody>{top_rows}</tbody></table></section>
 <section><h2>{T("questions_title", lang)} <small>{T("questions_hint", lang)}</small></h2>{q_html}</section>
 <section><h2>{T("by_type", lang)}</h2>{bars}<div style="height:8px"></div></section>
@@ -143,6 +145,77 @@ table.t{{width:100%;border-collapse:collapse;font-size:13.5px}}.t th{{text-align
 <section><h2>{T("all", lang)} <small>{T("in_order", lang)}</small></h2>{''.join(blocks)}</section>
 <p class="note">{T("note", lang)}</p>
 </div></body></html>"""
+
+
+def plan_rows(res, lang: str, base: float = 0.12) -> tuple[list[dict], list[dict], list[dict]]:
+    """Milestone 4/5 tables for the exports: markups from history, sensitivity per cost driver, alternatives."""
+    from . import history as H
+    from . import whatif as W
+    de_ = lang == "de"
+    L = (lambda a, b: a if de_ else b)
+    boq, sugg = res.boq, res.price_suggestions
+    hist = []
+    if res.history_info:
+        for r in H.markup_table(boq, res.flags, res.history_info, sugg, base=base):
+            h = res.history_info.get(r["oz"])
+            if not h and not r["findings"]:
+                continue
+            up, _ = W.unit_price(boq.by_oz()[r["oz"]], sugg)
+            hist.append({L("OZ", "Item"): r["oz"], L("Kurztext", "Short text"): r["short_text"][:80], "n": h.n if h else None,
+                         L("Menge Ist/LV", "Qty actual/planned"): round(h.qty_ratio, 2) if h and h.qty_ratio else None,
+                         L("Nachtragsquote", "Change-order rate"): round(h.co_rate, 2) if h else None,
+                         L("Kosten Ist/Soll je Einheit", "Unit cost actual/planned"): round(h.cost_ratio, 2) if h and h.cost_ratio else None,
+                         L("Nachtragsgründe", "Change-order reasons"): "; ".join(h.reasons) if h else "",
+                         L("Zuschlag Vorschlag", "Suggested markup"): round(r["markup"], 3),
+                         L("EP", "Unit price"): round(up, 2) if up else None,
+                         L("EP-Vorschlag", "Suggested unit price"): round(H.suggested_up(up, r["markup"], base), 2) if up else None})
+    sens = [{L("Preistreiber", "Cost driver"): W.DRIVERS[k][0 if de_ else 1], L("Δ € bei +10 %", "Δ € at +10 %"): round(v, 0)}
+            for k, v in W.sensitivity(boq, sugg) if abs(v) >= 1]
+    alts = [{L("OZ", "Item"): a["oz"], L("Kurztext", "Short text"): a["short_text"][:70],
+             L("Heute", "Now"): a["current"], L("Alternative", "Alternative"): a["alternative"],
+             L("Art", "Kind"): {"nebenangebot": L("Nebenangebot", "Alternative offer"), "risk": L("Risiko", "Risk")}[a["kind"]],
+             "Δ €": round(a["delta_total"], 0), L("Hinweis", "Note"): a["note_de"] if de_ else a["note_en"]}
+            for a in W.alternatives(boq, sugg)]
+    return hist, sens, alts
+
+
+def _plan_html(res, lang: str) -> str:
+    from . import history as H
+    from . import whatif as W
+    hist, sens, alts = plan_rows(res, lang)
+    if not (hist or sens or alts):
+        return ""
+    de_ = lang == "de"
+    L = (lambda a, b: a if de_ else b)
+    parts = []
+    if res.history_info:
+        co = H.expected_change_orders(res.history_info, res.boq, res.price_suggestions)
+        ex = L(" – Beispieldaten (simuliert)", " – example data (simulated)") if getattr(res.history_model, "example", False) else ""
+        parts.append(f"<p>{L('Erfahrungswerte für', 'Experience data for')} {len(res.history_info)} / {len(res.boq.items)} "
+                     f"{L('Positionen', 'items')}{_e(ex)} · {L('erwartetes Nachtragsvolumen', 'expected change-order volume')} "
+                     f"<b>{eur(co, lang)}</b></p>")
+    ctx = W.contract_context(res.boq)
+    if sens:
+        top = ", ".join(f"{_e(r[list(r)[0]])} {eur(r[list(r)[1]], lang)}" for r in sens[:3])
+        clause = (L("Stoffpreisgleitklausel erkannt.", "Material price escalation clause found.") if ctx["escalation"] else
+                  L("Keine Preisgleitklausel erkannt – Preissteigerungen trägt der AN.", "No price escalation clause found – "
+                    "the contractor carries price increases."))
+        parts.append(f"<p>{L('Empfindlichkeit (+10 % je Preistreiber)', 'Sensitivity (+10 % per cost driver)')}: {top}. {clause}</p>")
+    if alts:
+        sav = -sum(a["Δ €"] for a in alts if a["Δ €"] < 0)
+        parts.append(f"<p>{len(alts)} {L('Alternativen erkannt; Einsparpotenzial durch Nebenangebote bis', 'alternatives found; saving potential from alternative offers up to')} "
+                     f"<b>{eur(sav, lang)}</b>.</p>")
+    return f"<section><h2>{L('Kalkulation: Historie & Was-wäre-wenn', 'Pricing: history & what-if')}</h2>{''.join(parts)}</section>"
+
+
+def _notes_html(res, lang: str) -> str:
+    notes = getattr(res, "project_notes", None) or []
+    if not notes:
+        return ""
+    icon = {"high": "🔴", "medium": "🟠", "low": "⚪", "info": "🔵"}
+    rows = "".join(f"<li>{icon.get(n['severity'], '')} {_e(n['de'] if lang == 'de' else n['en'])}</li>" for n in notes)
+    title = "Projekt-Hinweise (aus dem Vergleich der Dateien)" if lang == "de" else "Project notes (from comparing the files)"
+    return f"<section><h2>{title}</h2><ul class='notes'>{rows}</ul></section>"
 
 
 def _item_block(oz, title, it, flags, lang, sugg=None) -> str:
@@ -206,7 +279,28 @@ def to_excel(res: Result, path, lang: str = "de") -> Path:
         pd.DataFrame(pos or [{T("c_oz", lang): "–"}]).to_excel(xw, sheet_name=T("sheet_items", lang), index=False)
         if res.ifc_table:
             pd.DataFrame(res.ifc_table).to_excel(xw, sheet_name=T("sheet_ifc", lang), index=False)
+        if getattr(res, "project_notes", None):
+            pd.DataFrame(notes_rows(res.project_notes, lang)).to_excel(
+                xw, sheet_name="Projekt-Hinweise" if lang == "de" else "Project notes", index=False)
+        hist, sens, alts = plan_rows(res, lang)
+        if hist:
+            pd.DataFrame(clean(hist)).to_excel(xw, sheet_name="Historie & Zuschläge" if lang == "de" else "History & markups",
+                                               index=False)
+        if sens or alts:
+            sh = "Was-wäre-wenn" if lang == "de" else "What-if"
+            pd.DataFrame(sens or [{"–": "–"}]).to_excel(xw, sheet_name=sh, index=False)
+            if alts:
+                pd.DataFrame(clean(alts)).to_excel(xw, sheet_name=sh, index=False, startrow=len(sens) + 3)
     return out
+
+
+def notes_rows(notes, lang: str) -> list[dict]:
+    from openpyxl.cell.cell import ILLEGAL_CHARACTERS_RE
+    de = lang == "de"
+    return [{("Stufe" if de else "Severity"): sev_label(n["severity"], lang),
+             ("Hinweis" if de else "Note"): ILLEGAL_CHARACTERS_RE.sub("", n["de"] if de else n["en"]),
+             ("Positionen" if de else "Items"): ", ".join(n["items"]), ("Betrag €" if de else "Amount €"): n["eur"] or None}
+            for n in notes]
 
 
 def write_html(res: Result, path, lang: str = "de") -> Path:

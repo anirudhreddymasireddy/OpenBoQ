@@ -58,6 +58,7 @@ class Flag:
     question: dict = field(default_factory=dict)   # bidder question {"de": ..., "en": ...}
     decision: dict = field(default_factory=dict)   # {"status": confirmed|dismissed, "by", "at", "reason", "source"}
     learned: dict = field(default_factory=dict)    # calibration note {"de", "en"} when severity was lowered
+    challenge: dict = field(default_factory=dict)  # client reviewer: {"verdict", "de", "en", "evidence"}
     data: dict = field(default_factory=dict)       # machine-readable details (e.g. price ratio) for rules
     fp: str = ""                 # stable fingerprint, used to remember decisions across runs
     status: str = "open"         # open | confirmed | dismissed | suppressed
@@ -88,6 +89,8 @@ class BoQ:
     sections: dict[str, str] = field(default_factory=dict)  # section_oz -> label
     notes: list[dict] = field(default_factory=list)          # preliminary notes / remarks: {"ref", "text"}
     client: str = ""                                         # Auftraggeber, if known
+    parse_info: dict = field(default_factory=dict)           # which reader, number format, quality score
+    totals: dict = field(default_factory=dict)               # printed totals: net, vat, vat_rate, gross, sections{oz: sum}
 
     @property
     def total(self) -> float:

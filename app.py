@@ -11,6 +11,15 @@ from pathlib import Path
 import pandas as pd
 import streamlit as st
 
+# hosted (Streamlit Community Cloud): API keys and logins live in the app's Secrets settings – copy them into the
+# environment the providers read; nothing secret is ever in the repository
+try:
+    for _k, _v in st.secrets.items():
+        if isinstance(_v, (str, int, float, bool)):
+            os.environ.setdefault(_k, str(_v))
+except Exception:                                   # no secrets file locally – fine
+    pass
+
 from openboq.fmt import money, num
 from openboq.gaeb_parser import load_boq
 from openboq.i18n import LANGS, T, category_counts, questions, rule_name, sev_label, src_label
@@ -39,6 +48,186 @@ def _save(upload) -> Path:
     return p
 
 
+def _pair_ifc(lv_name: str, ifc_paths: dict, n_lv: int):
+    """IFC model for a BoQ file: same file name stem, or best overlap of name parts; a single model is used for all."""
+    if not ifc_paths:
+        return None
+    if len(ifc_paths) == 1:
+        return next(iter(ifc_paths.values()))
+    import re as _re
+    stem = Path(lv_name).stem.lower()
+    words = set(_re.findall(r"[a-zäöü0-9]{3,}", stem))
+    best, score = None, 0
+    for name, path in ifc_paths.items():
+        w = set(_re.findall(r"[a-zäöü0-9]{3,}", Path(name).stem.lower()))
+        sc = 10 if Path(name).stem.lower() == stem else len(words & w)
+        if sc > score:
+            best, score = path, sc
+    return best
+
+
+def _projects(batch: dict, lang: str = "de") -> dict:
+    """Files of the same project (same item numbers/quantities, any format) -> one merged entry each, plus the
+    differences between the versions as findings."""
+    from openboq import crossfile as X
+    key = st.session_state.get("upload_name")
+    if st.session_state.get("merged_for") == key:
+        return st.session_state.get("merged", {})
+    boqs = {n: e["boq"] for n, e in batch.items() if e["boq"] is not None}
+    copies = X.duplicates(boqs)                       # same content under another file name
+    for c, orig in copies.items():
+        batch[c]["copy_of"] = orig
+    boqs = {n: b for n, b in boqs.items() if n not in copies}
+    merged = {}
+    for k, names in enumerate(X.group_projects(boqs), 1):
+        label = f"🔗 Projekt {k} ({len(names)} Dateien)" if lang == "de" else f"🔗 Project {k} ({len(names)} files)"
+        merged[label] = {"boq": X.merge(boqs, names), "ifc": next((batch[n]["ifc"] for n in names if batch[n]["ifc"]), None),
+                         "error": "", "extra": X.compare(boqs, names), "files": names}
+        for n in names:
+            batch[n]["project"] = k
+    st.session_state["merged"], st.session_state["merged_for"] = merged, key
+    return merged
+
+
+def _batch_overview(batch: dict, use_llm: bool, lang: str):
+    """One row per uploaded file: format, reader, items, totals check, findings, exposure – then open one in detail.
+    Files of the same project get a combined row (texts + prices + clauses of all files, plus version differences)."""
+    de_ = lang == "de"
+    merged = _projects(batch, lang)
+    batch = {**batch, **merged}
+    st.subheader((f"Stapelprüfung: {len(batch) - len(merged)} Dateien" if de_ else f"Batch check: {len(batch) - len(merged)} files")
+                 + (f" · {len(merged)} " + ("Projekt(e) erkannt" if de_ else "project(s) recognised") if merged else ""))
+    if merged:
+        st.caption("Dateien desselben Projekts (gleiche Positionen/Mengen, beliebiges Format) werden zusammengeführt: Texte aus "
+                   "der Textdatei, Preise aus der Preisdatei, Vorbemerkungen aus allen – und jede Abweichung zwischen den "
+                   "Fassungen ist ein Befund." if de_ else
+                   "Files of the same project (same items/quantities, any format) are combined: texts from the text file, "
+                   "prices from the price file, preliminary notes from all – and every difference between the versions is a finding.")
+    cache = st.session_state.setdefault("batch_res", {})
+    todo = [n for n, e in batch.items() if e["boq"] is not None and not e.get("copy_of") and (n, use_llm, lang) not in cache]
+    if todo:
+        prog = st.progress(0.0, text="…")
+        for k, n in enumerate(todo):
+            prog.progress(k / len(todo), text=f"{n} ({k + 1}/{len(todo)})" + (" · KI" if use_llm and de_ else " · AI" if use_llm else ""))
+            e = batch[n]
+            try:
+                r_ = analyze(e["boq"], ifc=e["ifc"], use_llm=use_llm, lang=lang, source=n, feedback="auto", rules="auto")
+                r_.flags += e.get("extra", [])
+                if e.get("files"):
+                    from openboq import crossfile as X
+                    full = {m: batch[m]["boq"] for m in e["files"]}
+                    r_.project_notes = X.project_notes(full, e["files"], e["boq"], r_.flags, e.get("extra", []))
+                    e["notes"] = r_.project_notes
+                cache[(n, use_llm, lang)] = r_
+            except Exception as ex:
+                e["error"] = f"{type(ex).__name__}: {str(ex)[:160]}"
+        prog.empty()
+    rows = []
+    for n, e in batch.items():
+        b, r = e["boq"], cache.get((n, use_llm, lang))
+        if e.get("copy_of"):
+            rows.append({"Datei" if de_ else "File": n, "Format": Path(n).suffix.lower().lstrip("."),
+                         ("Fehler" if de_ else "Error"): (f"identischer Inhalt wie {e['copy_of']} – nicht doppelt geprüft"
+                                                          if de_ else f"same content as {e['copy_of']} – not checked twice")})
+            continue
+        if b is None or r is None:
+            rows.append({"Datei" if de_ else "File": n, "Format": Path(n).suffix.lower().lstrip("."),
+                         ("Fehler" if de_ else "Error"): e["error"] or "–"})
+            continue
+        cnt = {s_: sum(1 for f in r.counted if f.severity == s_) for s_ in ("high", "medium")}
+        tot = next((f for f in r.flags if f.rule_id == "R26" and not f.oz), None)
+        diffs = sum(1 for f in e.get("extra", []))
+        rows.append({
+            "Datei" if de_ else "File": n,
+            "Projekt" if de_ else "Project": (f"P{e['project']}" if e.get("project") else
+                                              ("+".join(Path(x).suffix.lstrip(".") for x in e["files"]) if e.get("files") else "–")),
+            "Format": "merged" if e.get("files") else Path(n).suffix.lower().lstrip("."),
+            "Leser" if de_ else "Reader": (b.parse_info or {}).get("reader", "gaeb"),
+            "Positionen" if de_ else "Items": len(b.items),
+            "LV-Summe" if de_ else "BoQ total": round(b.total, 2),
+            "🔴": cnt["high"], "🟠": cnt["medium"],
+            "Risiko €" if de_ else "Risk €": round(r.exposure, 0),
+            "Summenprüfung" if de_ else "Totals check": ("❌ " + money(tot.exposure_eur, lang)) if tot else
+            ("✅" if b.totals else "–"),
+            "IFC": "✓" if e["ifc"] else "",
+            "KI" if de_ else "AI": ("⚠" if r.llm_errors else "✓") if use_llm else "",
+            "Abweichungen" if de_ else "Version diffs": diffs if e.get("files") else None,
+        })
+    df = pd.DataFrame(rows)
+    df = df.astype(object).where(pd.notna(df), None)        # failed files: empty cells instead of NaN
+    st.dataframe(df, hide_index=True, width="stretch")
+    for n, e in batch.items():
+        notes = e.get("notes") or []
+        if notes:
+            with st.expander(f"📌 {n} – " + (f"{len(notes)} Projekt-Hinweise" if de_ else f"{len(notes)} project notes"),
+                             expanded=True):
+                for nt in notes:
+                    st.markdown(f"{SEV_ICON.get(nt['severity'], '')} {nt['de'] if de_ else nt['en']}")
+    ok = [n for n, e in batch.items() if e["boq"] is not None and not e.get("copy_of") and (n, use_llm, lang) in cache]
+    c1, c2 = st.columns([3, 2])
+    with c1:
+        sel = st.selectbox("Datei im Detail öffnen" if de_ else "Open file in detail", ok,
+                           index=ok.index(st.session_state.get("open_file")) if st.session_state.get("open_file") in ok else 0)
+    if sel and sel != st.session_state.get("open_file"):
+        st.session_state["open_file"] = sel
+        st.session_state["boq"], st.session_state["ifc"] = batch[sel]["boq"], batch[sel]["ifc"]
+        st.session_state["source"] = sel
+        st.session_state["extra_flags"] = batch[sel].get("extra", [])
+        st.rerun()
+    with c2:
+        st.download_button("⬇ " + ("Alle Befunde (Excel)" if de_ else "All findings (Excel)"),
+                           data=_batch_excel(batch, cache, use_llm, lang, df),
+                           file_name="openboq_batch.xlsx", width="stretch")
+    st.divider()
+
+
+def _batch_excel(batch, cache, use_llm, lang, overview) -> bytes:
+    """One workbook, no duplicates: a project's findings appear once (on the combined row); a member file adds only
+    findings that are specific to that file (reading problems, its own totals …); identical copies are skipped."""
+    import io
+    from openboq.report import notes_rows
+    rows, qrows, nrows = [], [], []
+    member_of = {m: n for n, e in batch.items() for m in (e.get("files") or [])}
+    project_keys = {}
+    order = [n for n, e in batch.items() if e.get("files")] + [n for n, e in batch.items() if not e.get("files")]
+    for n in order:
+        e = batch[n]
+        r = cache.get((n, use_llm, lang))
+        if r is None or e.get("copy_of"):
+            continue
+        seen = project_keys.get(member_of.get(n), set())
+        own = set()
+        for f in r.flags:
+            key = (f.rule_id, f.oz, f.title)
+            own.add(key)
+            if key in seen:
+                continue                                   # already reported on the project row
+            t, m, sug = f.txt(lang)
+            rows.append({"File": n, "Severity": sev_label(f.severity, lang), "Item": f.oz, "Rule": f.rule_id,
+                         "Finding": t, "Explanation": m, "Basis": f.reference, "Suggestion": sug,
+                         "Risk €": round(f.exposure_eur, 2)})
+        if e.get("files"):
+            project_keys[n] = own
+        qs = questions(r.flags, lang)
+        if n in member_of:
+            pq = set(questions(cache.get((member_of[n], use_llm, lang)).flags, lang)) if cache.get((member_of[n], use_llm, lang)) else set()
+            qs = [q for q in qs if q not in pq]
+        qrows += [{"File": n, "Question": q} for q in qs]
+        for nr in notes_rows(e.get("notes") or [], lang):
+            nrows.append({"Project": n, **nr})
+    buf = io.BytesIO()
+    with pd.ExcelWriter(buf, engine="openpyxl") as xw:
+        overview.to_excel(xw, sheet_name="Overview", index=False)
+        clean = lambda d: d.apply(lambda c: c.map(lambda v: _ILLEGAL.sub("", v) if isinstance(v, str) else v))
+        if nrows:
+            clean(pd.DataFrame(nrows)).to_excel(xw, sheet_name="Project notes", index=False)
+        clean(pd.DataFrame(rows)).to_excel(xw, sheet_name="Findings", index=False)
+        clean(pd.DataFrame(qrows)).to_excel(xw, sheet_name="Bidder questions", index=False)
+    return buf.getvalue()
+
+
+from openpyxl.cell.cell import ILLEGAL_CHARACTERS_RE as _ILLEGAL  # noqa: E402
+
 # ---------------------------------------------------------------- sidebar
 with st.sidebar:
     st.markdown("## 📐 OpenBoQ")
@@ -50,16 +239,23 @@ with st.sidebar:
         if st.button(T("logout", lang)):
             st.session_state.pop("user", None)
             st.rerun()
-    lv_up = st.file_uploader(T("upload_lv", lang),
-                             type=["x81", "x83", "x84", "x86", "xml", "d81", "d83", "d84", "d86", "pdf", "csv", "xlsx"])
-    ifc_up = st.file_uploader(T("upload_ifc", lang), type=["ifc"])
+    lv_ups = st.file_uploader(T("upload_lv", lang) + (" (mehrere möglich)" if lang == "de" else " (several allowed)"),
+                              type=["x81", "x83", "x84", "x86", "xml", "d81", "d83", "d84", "d86", "pdf", "docx", "txt",
+                                    "csv", "xlsx"], accept_multiple_files=True)
+    ifc_ups = st.file_uploader(T("upload_ifc", lang) + (" (Zuordnung über Dateinamen)" if lang == "de" else
+                                                        " (matched by file name)"), type=["ifc"], accept_multiple_files=True)
     with st.expander(T("demo_box", lang)):
         demo = st.button(T("load_demo", lang), width="stretch")
         seed = st.number_input(T("demo_seed", lang), 0, 999, 1, help=T("demo_seed_help", lang))
     st.divider()
-    has_key = bool(os.environ.get("ANTHROPIC_API_KEY"))
-    use_llm = st.toggle(T("ai_toggle", lang), value=False, disabled=not has_key,
-                        help=T("ai_needs_key", lang) if not has_key else T("ai_help", lang))
+    from openboq.llm_checks import available as _llm_available, default_model as _llm_model, provider_label as _llm_provider
+    has_key = _llm_available()
+    debug = st.toggle("🔧 Debug", value=False, help="Zeigt das interne Prüfprotokoll (zweite Prüfung durch die AG-Sicht). "
+                      "Nur in der App, nie im Export." if lang == "de" else
+                      "Shows the internal check log (second check from the client's side). App only, never exported.")
+    use_llm = st.toggle(T("ai_toggle", lang).replace("(Claude)", f"({_llm_provider()})" if has_key else "(Claude)"),
+                        value=False, disabled=not has_key,
+                        help=T("ai_needs_key", lang) if not has_key else f"{T('ai_help', lang)} · {_llm_model()}")
 
 if auth.enabled() and not st.session_state.get("user") and auth.autologin():
     st.session_state["user"] = auth.autologin()          # demo mode: NR_AUTOLOGIN=<username>
@@ -68,10 +264,14 @@ if auth.enabled() and not st.session_state.get("user"):
     st.title("OpenBoQ")
     with st.form("login"):
         st.subheader(T("login_title", lang))
-        u = st.text_input(T("username", lang))
-        pw = st.text_input(T("password", lang), type="password")
+        if auth.name_only():                              # NR_LOGIN=name: just a name, no password
+            u = st.text_input("Ihr Name" if lang == "de" else "Your name")
+            pw = None
+        else:
+            u = st.text_input(T("username", lang))
+            pw = st.text_input(T("password", lang), type="password")
         if st.form_submit_button(T("login_btn", lang), type="primary"):
-            user = auth.check(u, pw)
+            user = auth.name_login(u) if auth.name_only() else auth.check(u, pw)
             if user:
                 st.session_state["user"] = user
                 st.rerun()
@@ -86,12 +286,32 @@ if demo:
     st.session_state["ifc"] = str(DATA / "sample_model.ifc")
     st.session_state["truth"] = truth
     st.session_state["source"] = "demo"
-elif lv_up is not None and st.session_state.get("upload_name") != (lv_up.name, ifc_up.name if ifc_up else None):
-    st.session_state["boq"] = load_boq(_save(lv_up))
-    st.session_state["ifc"] = str(_save(ifc_up)) if ifc_up else None
+elif lv_ups and st.session_state.get("upload_name") != (tuple(f.name for f in lv_ups), tuple(f.name for f in ifc_ups or [])):
+    batch, ifc_paths = {}, {f.name: str(_save(f)) for f in ifc_ups or []}
+    prog = st.progress(0.0, text=T("checking", lang))
+    for k, up in enumerate(lv_ups):
+        entry = {"ifc": _pair_ifc(up.name, ifc_paths, len(lv_ups)), "error": ""}
+        try:
+            entry["boq"] = load_boq(_save(up))
+        except Exception as e:                      # one broken file must not stop the batch
+            entry["boq"], entry["error"] = None, f"{type(e).__name__}: {str(e)[:160]}"
+        batch[up.name] = entry
+        prog.progress((k + 1) / len(lv_ups), text=f"{up.name} ({k + 1}/{len(lv_ups)})")
+    prog.empty()
+    st.session_state["batch"] = batch
+    st.session_state["batch_res"] = {}
+    first = next((n for n, e in batch.items() if e["boq"] is not None), None)
+    st.session_state["open_file"] = first
+    if first:
+        st.session_state["boq"], st.session_state["ifc"] = batch[first]["boq"], batch[first]["ifc"]
     st.session_state["truth"] = None
-    st.session_state["upload_name"] = (lv_up.name, ifc_up.name if ifc_up else None)
-    st.session_state["source"] = lv_up.name
+    st.session_state["upload_name"] = (tuple(f.name for f in lv_ups), tuple(f.name for f in ifc_ups or []))
+    st.session_state["source"] = first or ""
+
+# ---------------------------------------------------------------- batch overview (several files)
+batch = st.session_state.get("batch") or {}
+if len(batch) > 1 and st.session_state.get("source") != "demo":
+    _batch_overview(batch, use_llm, lang)
 
 boq = st.session_state.get("boq")
 if boq is None:
@@ -119,21 +339,46 @@ if client:
 meta = {"client": client, "public": public, "project_type": ptype}
 
 # rules/IFC findings carry both languages; only the AI layer depends on the language
+# past projects (milestone 4): an uploaded / example file chosen in the history tab, else data/history.csv if present
+hist_src = st.session_state.get("history_path") or "auto"
 ck = (id(boq), st.session_state.get("ifc"), use_llm, lang if use_llm else "-", client, public,
-      st.session_state.get("fb_version", 0), st.session_state.get("rules_version", 0))
+      st.session_state.get("fb_version", 0), st.session_state.get("rules_version", 0), hist_src)
 if st.session_state.get("ck") != ck:
     with st.spinner(T("checking", lang)):
         st.session_state["res"] = analyze(boq, ifc=st.session_state.get("ifc"), use_llm=use_llm, lang=lang,
                                           source=st.session_state.get("source", ""),
                                           prices=None if st.session_state.get("source") == "demo" else "auto",
-                                          feedback=store, meta=meta)
+                                          feedback=store, meta=meta,
+                                          history=None if st.session_state.get("source") == "demo" and hist_src == "auto"
+                                          else hist_src)
+        st.session_state["res"].flags += st.session_state.get("extra_flags_wide", [])
+        if st.session_state.get("source", "").startswith("🔗"):
+            st.session_state["res"].flags += st.session_state.get("extra_flags", [])
+            st.session_state["res"].project_notes = (st.session_state.get("merged", {}).get(st.session_state["source"], {})
+                                                     .get("notes") or [])
     st.session_state["ck"] = ck
 res = st.session_state["res"]
+if getattr(res, "llm_errors", None):
+    st.warning((f"AI could not check {len(res.llm_errors)} batch(es) (usually the free-tier rate limit). "
+                "Rule results are complete; try again in a minute or switch model.") if lang == "en" else
+               (f"Die KI konnte {len(res.llm_errors)} Block/Blöcke nicht prüfen (meist Free-Tier-Limit). "
+                "Regelergebnisse sind vollständig; in einer Minute erneut versuchen oder Modell wechseln."))
+    with st.expander("Details"):
+        st.code("\n".join(res.llm_errors))
 
 # ---------------------------------------------------------------- header + KPIs
 st.title(boq.project or boq.name or "BoQ")
+_pi = boq.parse_info or {}
+_reader = {"ava-print": "AVA print reader", "layout-independent": "layout-independent reader", "ai": "AI reader"}.get(
+    _pi.get("reader", ""), "")
+if lang == "de":
+    _reader = {"AVA print reader": "AVA-Druck-Leser", "layout-independent reader": "layoutunabhängiger Leser",
+               "AI reader": "KI-Leser"}.get(_reader, _reader)
 st.caption(f"{boq.name} · GAEB DA {boq.phase or '–'} · {len(boq.items)} {T('items', lang)} · "
-           f"{T('lv_sum', lang)} {eur(boq.total)} · {T('analysis_in', lang)} {res.seconds*1000:.0f} ms")
+           f"{T('lv_sum', lang)} {eur(boq.total)} · {T('analysis_in', lang)} {res.seconds*1000:.0f} ms"
+           + (f" · {_reader}" if _reader else ""))
+if _pi.get("ai_error"):
+    st.caption(("AI reader unavailable: " if lang == "en" else "KI-Leser nicht verfügbar: ") + _pi["ai_error"])
 cats = category_counts(res.flags)
 qs = questions(res.flags, lang)
 c1, c2, c3, c4, c5 = st.columns([2, 1, 1, 1, 1])
@@ -148,10 +393,49 @@ c4.metric(T("k_opps", lang), cats["opportunity"], help=T("k_sub", lang))
 c5.metric(T("k_questions", lang), len(qs))
 if res.summary:
     st.info(res.summary)
+if getattr(res, "project_notes", None):
+    with st.container(border=True):
+        st.markdown("**📌 " + ("Projekt-Hinweise (aus dem Vergleich der Dateien)" if lang == "de" else
+                              "Project notes (from comparing the files)") + "**")
+        for nt in res.project_notes:
+            st.markdown(f"{SEV_ICON.get(nt['severity'], '')} {nt['de'] if lang == 'de' else nt['en']}")
 
-tab_top, tab_rev, tab_q, tab_rules, tab_all, tab_pos, tab_ifc, tab_eval = st.tabs(
+if debug:
+    with st.expander("🔧 " + ("Internes Prüfprotokoll – zweite Prüfung (AG-Sicht)" if lang == "de" else
+                              "Internal check log – second check (client's side)"), expanded=False):
+        log = [f for f in res.flags if f.challenge]
+        if not log:
+            st.caption("Keine zweite Prüfung gelaufen (KI aus oder keine Befunde)." if lang == "de" else
+                       "No second check ran (AI off or no findings).")
+        else:
+            st.dataframe(pd.DataFrame([{
+                "Item": f.oz or "LV", "Rule": f.rule_id, "Finding": f.txt(lang)[0],
+                "Model said": f.challenge.get("raw_verdict", ""), "Accepted as": f.challenge.get("verdict", ""),
+                "Severity": f"{f.challenge.get('before', '')} → {f.severity}" if f.challenge.get("before") != f.severity
+                            else f"{f.severity} (unchanged)",
+                "Argument": f.challenge.get(lang, ""), "Evidence": f.challenge.get("evidence", ""),
+                "Checked by": f.challenge.get("model", ""), "Findings mostly by": f.challenge.get("findings_by", "")}
+                for f in log]),
+                hide_index=True, width="stretch")
+            st.caption("'Model said' = Antwort des Modells; 'Accepted as' = was nach der Belegprüfung übrig bleibt "
+                       "(ohne Beleg im Dokument → holds). Fakten und Vertragsklauseln werden nie herabgestuft." if lang == "de" else
+                       "'Model said' = the model's answer; 'Accepted as' = what is left after the evidence check (no evidence "
+                       "in the document → holds). Facts and contract clauses are never lowered.")
+        if getattr(res, "llm_errors", None):
+            st.code("\n".join(res.llm_errors))
+
+tab_top, tab_rev, tab_q, tab_rules, tab_all, tab_pos, tab_hist, tab_what, tab_ifc, tab_eval = st.tabs(
     [T("tab_top", lang), T("tab_review", lang), T("tab_questions", lang), T("tab_rules", lang), T("tab_all", lang),
-     T("tab_pos", lang), T("tab_ifc", lang), T("tab_eval", lang)])
+     T("tab_pos", lang), "📈 " + ("Historie & Zuschläge" if lang == "de" else "History & markups"),
+     "🔀 " + ("Was-wäre-wenn" if lang == "de" else "What-if"), T("tab_ifc", lang), T("tab_eval", lang)])
+
+with tab_hist:
+    from openboq.ui_history import history_tab
+    history_tab(res, boq, lang, eur)
+
+with tab_what:
+    from openboq.ui_whatif import whatif_tab
+    whatif_tab(res, boq, lang, eur)
 
 with tab_rules:
     st.caption(T("rules_hint", lang))
@@ -258,6 +542,60 @@ with tab_rev:
                                    type="primary")
     if res.dismissed:
         st.caption(f"✖ {len(res.dismissed)} {T('auto_dismissed', lang)}")
+
+    # ---- the reviewer adds a finding the system missed; it comes back for the same / similar items next time
+    st.divider()
+    de_ = lang == "de"
+    st.markdown("**➕ " + ("Eigenen Befund hinzufügen" if de_ else "Add your own finding") + "**")
+    st.caption("Etwas übersehen? Position wählen und Befund eintragen – OpenBoQ meldet ihn künftig bei derselben Position "
+               "(in jedem Projekt, egal wie die Datei heißt) und schlägt ihn bei ähnlichen Positionen vor; die KI nutzt ihn als Beispiel."
+               if de_ else
+               "Something missed? Pick the item and describe the finding – OpenBoQ will report it for the same item in future "
+               "(any project, any file name), suggest it for similar items, and the AI uses it as an example.")
+    with st.form(f"manual_{id(boq)}", clear_on_submit=True):
+        opts = [""] + [f"{i.oz} · {i.short_text[:70]}" for i in boq.items]
+        c1, c2 = st.columns([3, 2])
+        pick = c1.selectbox("Position" if de_ else "Item", opts, format_func=lambda o: o or ("– LV-weit –" if de_ else "– whole BoQ –"))
+        title = c2.text_input("Befund (kurz)" if de_ else "Finding (short)")
+        c3, c4 = st.columns(2)
+        cats = {"error": T("k_errors", lang), "risk": T("k_risks", lang), "opportunity": T("k_opps", lang)}
+        cat = c3.selectbox("Art" if de_ else "Type", list(cats), format_func=cats.get, index=1)
+        sev = c4.selectbox("Schwere" if de_ else "Severity", ["high", "medium", "low"], index=1, format_func=lambda x: sev_label(x, lang))
+        note = st.text_area("Begründung / was ist das Problem?" if de_ else "Why / what is the problem?", height=80)
+        if st.form_submit_button("Befund speichern" if de_ else "Save finding", type="primary"):
+            if not title.strip():
+                st.warning("Bitte einen kurzen Befund eintragen." if de_ else "Please enter a short finding.")
+            elif not reviewer.strip():
+                st.warning(T("need_reviewer", lang))
+            else:
+                it = boq.by_oz().get(pick.split(" · ")[0]) if pick else None
+                store.add_manual(it, boq, title, cat, sev, note, reviewer=reviewer.strip(), meta=meta)
+                if it is None:                         # BoQ-wide: show it now for this project only
+                    from openboq.model import Flag as _F
+                    f_ = _F("M00", title.strip(), sev, note.strip() or title.strip(), source="team", reference="Team",
+                            en=dict(title=title.strip(), message=note.strip() or title.strip(), suggestion=""))
+                    f_.category = cat
+                    st.session_state.setdefault("extra_flags_wide", []).append(f_)
+                st.session_state["fb_version"] = st.session_state.get("fb_version", 0) + 1
+                st.success("Gespeichert – gilt ab sofort für diese und ähnliche Positionen." if de_ else
+                           "Saved – applies from now on to this and similar items.")
+                st.rerun()
+    team = store.manual_all(active_only=False)
+    if team:
+        with st.expander(("Team-Befunde" if de_ else "Team findings") + f" ({sum(1 for m in team if m['active'])})"):
+            tdf = pd.DataFrame([{"id": m["id"], ("aktiv" if de_ else "active"): bool(m["active"]),
+                                 T("c_oz", lang): m["item_oz"] or "–", ("Position" if de_ else "Item"): m["item_text"][:60],
+                                 T("c_finding", lang): m["title"], ("Von" if de_ else "By"): m["reviewer"],
+                                 ("Projekt" if de_ else "Project"): m["project"], ("Datum" if de_ else "Date"): m["created_at"][:10]}
+                                for m in team])
+            ted = st.data_editor(tdf, hide_index=True, width="stretch", key=f"team_{st.session_state.get('fb_version', 0)}",
+                                 disabled=[c for c in tdf.columns if c not in ("aktiv", "active")], column_config={"id": None})
+            if st.button("Änderungen speichern" if de_ else "Save changes", key="team_save"):
+                col = "aktiv" if de_ else "active"
+                for _, r in ted.iterrows():
+                    store.set_manual_active(int(r["id"]), bool(r[col]))
+                st.session_state["fb_version"] = st.session_state.get("fb_version", 0) + 1
+                st.rerun()
 
     st.divider()
     st.markdown(f"**{T('outcomes_title', lang)}**")

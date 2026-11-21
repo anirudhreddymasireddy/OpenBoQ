@@ -230,8 +230,8 @@ _COLS = {
     "long_text": ["langtext", "long text", "beschreibung"],
     "qty": ["menge", "qty", "quantity"],
     "unit": ["einheit", "me", "unit", "eh"],
-    "up": ["ep", "einheitspreis", "unit price", "up"],
-    "it": ["gp", "gesamtpreis", "gesamtbetrag", "total", "it"],
+    "up": ["ep", "einheitspreis", "unit price", "up", "rate", "ep (€)", "ep €"],
+    "it": ["gp", "gesamtpreis", "gesamtbetrag", "total", "it", "amount", "gp (€)", "gp €"],
 }
 
 
@@ -239,8 +239,23 @@ def parse_table(path) -> BoQ:
     import pandas as pd
 
     p = Path(path)
-    df = pd.read_excel(p) if p.suffix.lower() in (".xlsx", ".xls") else pd.read_csv(p, sep=None, engine="python")
-    lower = {str(c).strip().lower(): c for c in df.columns}
+    if p.suffix.lower() in (".xlsx", ".xls"):
+        df = pd.read_excel(p)
+    else:
+        df = None
+        for enc in ("utf-8-sig", "cp1252", "latin-1"):     # Excel writes a BOM; older tools write Windows-1252
+            try:
+                import warnings
+                with warnings.catch_warnings():
+                    warnings.simplefilter("ignore")
+                    df = pd.read_csv(p, sep=None, engine="python", encoding=enc, dtype=str, on_bad_lines="skip",
+                                     index_col=False)   # extra ";" in one row must not shift every column
+                break
+            except UnicodeDecodeError:
+                continue
+        if df is None:
+            raise ValueError("unreadable text encoding")
+    lower = {str(c).strip().lstrip("\ufeff").lower(): c for c in df.columns}
     colmap = {}
     for key, names in _COLS.items():
         for n in names:
@@ -250,17 +265,47 @@ def parse_table(path) -> BoQ:
     if "oz" not in colmap or "short_text" not in colmap:
         raise ValueError(f"Could not find OZ/Kurztext columns in {list(df.columns)}")
     boq = BoQ(name=p.stem)
+    sample = " ".join(str(v) for v in df.astype(str).values.ravel()[:2000])
+    german = len(re.findall(r"\d,\d{2}\b", sample)) >= len(re.findall(r"\d\.\d{2}\b", sample))
+    if re.search(r"Ã[¤¶¼Ÿ„–œ]|Ã\x9f", sample):
+        boq.parse_info["encoding_broken"] = True        # UTF-8 read as Windows-1252: "GrÃ¼ndung"
+    if p.suffix.lower() == ".csv":
+        raw_txt = p.read_bytes()
+        last = raw_txt.rstrip(b"\r\n").split(b"\n")[-1] if raw_txt.strip() else b""
+        sep = b";" if raw_txt.count(b";") > raw_txt.count(b",") else b","
+        head_n = raw_txt.split(b"\n")[0].count(sep)
+        if raw_txt and not raw_txt.endswith((b"\n", b"\r")) and last.count(sep) <= head_n and \
+                (last.rstrip().endswith((b",", b";")) or last.count(sep) < head_n):
+            boq.parse_info["truncated"] = True          # file ends in the middle of a row
     for _, row in df.iterrows():
         oz = str(row[colmap["oz"]]).strip()
         if not oz or oz.lower() == "nan":
+            txt = " ".join(str(v) for v in row.values if str(v).strip() and str(v) != "nan").strip()
+            low = txt.lower()
+            if any(w in low for w in ("mehrwertsteuer", "mwst", "gesamtsumme", "netto", "summe", "vat", "total")):
+                from .generic_reader import _take_total, detect_format
+                _take_total(boq, txt, detect_format(txt))
+            elif len(txt.split()) >= 4:              # a note / preliminary remark row (contract clauses!)
+                boq.notes.append({"ref": "Hinweis" if boq.items else "Vorbemerkungen", "text": txt})
             continue
-        get = lambda k: row[colmap[k]] if k in colmap else None
+        def get(k):
+            if k not in colmap:
+                return None
+            v = row[colmap[k]]
+            return None if v is None or (isinstance(v, float) and v != v) or str(v).strip() in ("", "nan", "None") else v
         unit = get("unit")
         issues = []
         for k in ("qty", "up", "it"):
             raw = get(k)
-            if raw is not None and str(raw).strip() not in ("", "nan") and parse_number(raw) is None:
-                issues.append(f"{k}: '{raw}'")
+            r = str(raw).strip() if raw is not None else ""
+            if r in ("", "nan", "None"):
+                continue
+            if re.search(r"\d[Oo]|[Oo]\d|\d[lI]\b", r):          # letter O / l instead of a digit
+                issues.append(f"{k}: '{r}'")
+            elif german and re.fullmatch(r"-?\d+\.\d{2}", r):        # "5.00" in a German document
+                issues.append(f"fmt:{ {'qty': 'Menge', 'up': 'EP', 'it': 'GP'}[k] }: '{r}'")
+            elif parse_number(raw) is None:
+                issues.append(f"{k}: '{r}'")
         it = Item(
             oz=oz,
             short_text=str(get("short_text") or "").strip(),
@@ -273,7 +318,12 @@ def parse_table(path) -> BoQ:
         )
         it.section_oz = oz.split(".")[0]
         it.lump_sum = it.unit.lower() in ("psch", "pa", "pauschal")
+        low = (it.short_text + " " + it.long_text).lower()
+        it.provisional = "bedarfsposition" in low or "eventualposition" in low
+        it.alternative = "wahlposition" in low or "alternativposition" in low
         boq.items.append(it)
+    if boq.parse_info.get("truncated") and boq.items:
+        boq.items[-1].issues.append("Zeile unvollständig (Datei abgeschnitten)")
     return boq
 
 
@@ -281,10 +331,20 @@ def load_boq(path) -> BoQ:
     p = Path(path)
     suf = p.suffix.lower()
     if suf in (".csv", ".xlsx", ".xls", ".tsv"):
-        return parse_table(p)
-    if suf == ".pdf":
-        from .pdf_parser import parse_pdf
-        return parse_pdf(p)
+        try:
+            return parse_table(p)
+        except ValueError:
+            if suf in (".xlsx", ".xls"):
+                raise
+            # a title line above the header ("[Tabellenblatt: LV]"), free layout in a .csv – the layout-independent reader copes
+            from .smart_reader import read_document
+            b = read_document(p)
+            if not b.items:
+                raise
+            return b
+    if suf in (".pdf", ".docx", ".txt"):
+        from .smart_reader import read_document
+        return read_document(p)
     head = p.read_bytes()[:200].lstrip()
     if head.startswith(b"<") or head.startswith(b"\xef\xbb\xbf<"):
         return parse_gaeb_xml(p)
