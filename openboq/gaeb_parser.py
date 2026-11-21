@@ -14,6 +14,11 @@ from lxml import etree
 from .model import BoQ, Item
 
 
+# Hardened parser: no external entities, no DTD loading, no network (XXE protection for untrusted files).
+def _xml_parser():
+    return etree.XMLParser(recover=True, huge_tree=True, resolve_entities=False, no_network=True, load_dtd=False)
+
+
 def _local(tag) -> str:
     if not isinstance(tag, str):
         return ""
@@ -107,9 +112,16 @@ def _parse_item(el, prefix: list[str], section_oz: str, section_label: str) -> I
     if not short_text and long_text:
         short_text = long_text.split("\n", 1)[0][:120]
 
+    issues = []
+
     def num(name):
         c = _child(el, name)
-        return parse_number(c.text) if c is not None else None
+        if c is None or not (c.text or "").strip():
+            return None
+        v = parse_number(c.text)
+        if v is None:
+            issues.append(f"{name}: '{c.text.strip()}'")
+        return v
 
     provis = _child(el, "Provis")
     item = Item(
@@ -129,6 +141,7 @@ def _parse_item(el, prefix: list[str], section_oz: str, section_label: str) -> I
         hourly=_flag(el, "HourIt"),
         stlb=any("STLB" in _local(c.tag).upper() for c in el.iter()),
         raw_id=el.get("ID", ""),
+        issues=issues,
     )
     return item
 
@@ -142,6 +155,9 @@ def _walk_body(body, prefix: list[str], boq: BoQ, section_oz: str, section_label
             new_prefix = prefix + [rno] if rno else prefix
             oz = ".".join(new_prefix)
             boq.sections[oz] = label
+            add = _child(node, "AddText")
+            if add is not None and _rich_text(add):
+                boq.notes.append({"ref": oz, "text": _rich_text(add)})
             # Items inherit the *top-level* Titel as their section.
             if not section_oz:
                 s_oz, s_label = oz, f"{oz} {label}".strip()
@@ -152,19 +168,24 @@ def _walk_body(body, prefix: list[str], boq: BoQ, section_oz: str, section_label
                 _walk_body(sub, new_prefix, boq, s_oz, s_label)
         elif name == "Itemlist":
             for it in node:
-                if _local(it.tag) == "Item":
+                tag = _local(it.tag)
+                if tag == "Item":
                     boq.items.append(_parse_item(it, prefix, section_oz, section_label))
+                elif tag == "Remark":            # Hinweistext / Vorbemerkung inside the item list
+                    txt = _rich_text(_first(_find_desc(it, "DetailTxt"), it))
+                    if txt:
+                        boq.notes.append({"ref": ".".join(prefix), "text": txt})
         elif name == "Item":
             boq.items.append(_parse_item(node, prefix, section_oz, section_label))
 
 
 def parse_gaeb_xml(path_or_bytes) -> BoQ:
     if isinstance(path_or_bytes, (bytes, bytearray)):
-        root = etree.fromstring(bytes(path_or_bytes), parser=etree.XMLParser(recover=True, huge_tree=True))
+        root = etree.fromstring(bytes(path_or_bytes), parser=_xml_parser())
         fname = ""
     else:
         p = Path(path_or_bytes)
-        root = etree.parse(str(p), parser=etree.XMLParser(recover=True, huge_tree=True)).getroot()
+        root = etree.parse(str(p), parser=_xml_parser()).getroot()
         fname = p.name
 
     boq = BoQ()
@@ -183,12 +204,18 @@ def parse_gaeb_xml(path_or_bytes) -> BoQ:
     if dp is not None and dp.text:
         boq.phase = dp.text.strip()
 
+    own = _find_desc(root, "OWN")
+    if own is not None:
+        boq.client = " ".join(t.strip() for t in own.itertext() if t.strip())[:160]
     boq_el = _find_desc(root, "BoQ")
     if boq_el is None:
         raise ValueError("No <BoQ> element found – is this a GAEB DA XML file?")
     info = _child(boq_el, "BoQInfo")
     if info is not None:
         boq.name = _rich_text(_child(info, "Name")) or _rich_text(_child(info, "LblTx"))
+        add = _child(info, "AddText")
+        if add is not None and _rich_text(add):
+            boq.notes.append({"ref": "LV", "text": _rich_text(add)})
     body = _child(boq_el, "BoQBody")
     if body is not None:
         _walk_body(body, [], boq, "", "")
@@ -229,6 +256,11 @@ def parse_table(path) -> BoQ:
             continue
         get = lambda k: row[colmap[k]] if k in colmap else None
         unit = get("unit")
+        issues = []
+        for k in ("qty", "up", "it"):
+            raw = get(k)
+            if raw is not None and str(raw).strip() not in ("", "nan") and parse_number(raw) is None:
+                issues.append(f"{k}: '{raw}'")
         it = Item(
             oz=oz,
             short_text=str(get("short_text") or "").strip(),
@@ -237,6 +269,7 @@ def parse_table(path) -> BoQ:
             unit=str(unit).strip() if unit is not None and str(unit) != "nan" else "",
             up=parse_number(get("up")),
             it=parse_number(get("it")),
+            issues=issues,
         )
         it.section_oz = oz.split(".")[0]
         it.lump_sum = it.unit.lower() in ("psch", "pa", "pauschal")

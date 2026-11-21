@@ -16,6 +16,15 @@ _ALIASES = {
     "Wo": ["wo", "woche", "wochen", "wo."],
     "Mt": ["mt", "monat", "monate", "mon"],
     "m2Wo": ["m2wo", "m²wo", "m2xwo", "m² x wo", "m2 x wo"],
+    "mWo": ["mwo", "m x wo", "mxwo", "lfmwo"],
+    "StWo": ["stwo", "st x wo", "stxwo", "stkwo"],
+    "StTag": ["sttag", "st x tag"],
+    "Jahr": ["jahr", "jahre", "a"],
+    "Satz": ["satz", "sa"],
+    "l": ["l", "ltr", "liter"],
+    "km": ["km"],
+    "ha": ["ha"],
+    "LE": ["le", "lst", "leistungseinheit", "vb"],
 }
 _LOOKUP = {a: k for k, al in _ALIASES.items() for a in al}
 
@@ -34,8 +43,17 @@ def norm_unit(u: str) -> str:
 FAMILY = {
     "m3": "volume", "m2": "area", "m": "length", "St": "count", "t": "mass", "kg": "mass",
     "psch": "lump", "h": "time", "d": "time", "Wo": "time", "Mt": "time", "m2Wo": "area_time",
+    "mWo": "length_time", "StWo": "count_time", "StTag": "count_time", "Jahr": "time", "Satz": "count", "l": "volume_l",
+    "km": "length", "ha": "area", "LE": "unit",
 }
 
 
 def family(u: str) -> str:
     return FAMILY.get(norm_unit(u), "unknown")
+
+
+KNOWN = set(_ALIASES)
+
+
+def is_known(u: str) -> bool:
+    return norm_unit(u) in KNOWN

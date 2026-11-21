@@ -37,8 +37,11 @@ SKIP = re.compile(r"^(übertrag|seite\s*\d|summe|zwischensumme|ordnungszahl|oz\s
                   r"projekt:|lv:|datum|lv-datum|bauvorhaben|übertrag:|nr\.\)|menge\s|einheitspreis|gesamtbetrag)", re.I)
 
 
+_CTRL = re.compile("[\x00-\x08\x0b\x0c\x0e-\x1f\ufffe\uffff]")   # control chars some PDF engines emit
+
+
 def _clean(line: str) -> str:
-    line = line.replace(" ", " ").replace("ž", " ")
+    line = _CTRL.sub("", line).replace("\u00a0", " ").replace("\u017e", " ")
     line = re.sub(r"\s+", " ", line).strip()
     return line
 
@@ -56,13 +59,61 @@ def oz_key(oz: str) -> tuple:
     return tuple(int(p) if p.isdigit() else p for p in re.split(r"[.\s]+", oz.strip(".")) if p)
 
 
-def extract_lines(path) -> list[str]:
+def _pages_pdfium(path) -> list[str]:
+    import pypdfium2 as pdfium
+    doc = pdfium.PdfDocument(str(path))
+    try:
+        return [doc[i].get_textpage().get_text_range() or "" for i in range(len(doc))]
+    finally:
+        doc.close()
+
+
+def _pages_plumber(path) -> list[str]:
     import pdfplumber
-    pages = []
     with pdfplumber.open(str(path)) as pdf:
-        for page in pdf.pages:
-            txt = page.extract_text(x_tolerance=1.5) or ""
-            pages.append([_clean(l) for l in txt.splitlines() if _clean(l)])
+        return [page.extract_text(x_tolerance=1.5) or "" for page in pdf.pages]
+
+
+def _pages_plumber_subset(path, idx: list[int]) -> list[str]:
+    import pdfplumber
+    with pdfplumber.open(str(path)) as pdf:
+        return [pdf.pages[i].extract_text(x_tolerance=1.5) or "" for i in idx]
+
+
+def _sample_agrees(path, fast_texts: list[str]) -> bool:
+    """Cross-check the fast engine on a few sample pages against pdfplumber."""
+    n = len(fast_texts)
+    idx = sorted({int(k * (n - 1) / 4) for k in range(5)}) if n > 5 else list(range(n))
+    slow = _pages_plumber_subset(path, idx)
+    a = {(i.oz, i.qty) for i in _parse_lines(_lines_from_texts(slow, filter_headers=False), "x").items}
+    b = {(i.oz, i.qty) for i in _parse_lines(_lines_from_texts([fast_texts[i] for i in idx], filter_headers=False), "x").items}
+    if len(a) < 3 or len(a & b) >= 0.9 * len(a):
+        return True                       # engines agree -> keep the fast one
+    if len(b) >= 1.15 * len(a):
+        return True                       # fast engine clearly reads more items (pdfplumber splits words here)
+    return False                          # they disagree and it's close -> accuracy over speed
+
+
+def extract_lines(path, engine: str | None = None) -> list[str]:
+    """Fast engine (pypdfium2, ~30x faster) with a sample cross-check; falls back to pdfplumber for layouts
+    where the fast engine reads columns in a different order. NR_PDF=plumber forces pdfplumber."""
+    import os
+    engine = engine or os.environ.get("NR_PDF", "auto")
+    texts = []
+    if engine in ("auto", "pdfium"):
+        try:
+            texts = _pages_pdfium(path)
+        except Exception:
+            texts = []
+        if texts and engine == "auto" and not _sample_agrees(path, texts):
+            texts = []
+    if not texts or sum(len(t) for t in texts) < 50:
+        texts = _pages_plumber(path)
+    return _lines_from_texts(texts)
+
+
+def _lines_from_texts(texts: list[str], filter_headers: bool = True) -> list[str]:
+    pages = [[_clean(l) for l in t.splitlines() if _clean(l)] for t in texts]
     # running headers/footers: identical lines on > 40 % of pages. Digits are normalised only for lines that look
     # like page furniture (page numbers, dates); item / quantity lines are never dropped, however often they repeat.
     def norm(s):
@@ -74,7 +125,7 @@ def extract_lines(path) -> list[str]:
     out = []
     for p in pages:
         for l in p:
-            if len(pages) > 2 and cnt[norm(l)] >= thresh and not protected(l):
+            if filter_headers and len(pages) > 2 and cnt[norm(l)] >= thresh and not protected(l):
                 continue
             if SKIP.match(l):
                 continue
@@ -83,10 +134,14 @@ def extract_lines(path) -> list[str]:
 
 
 def parse_pdf(path) -> BoQ:
-    lines = extract_lines(path)
-    boq = BoQ(name=Path(path).stem)
+    return _parse_lines(extract_lines(path), Path(path).stem)
+
+
+def _parse_lines(lines: list[str], name: str) -> BoQ:
+    boq = BoQ(name=name)
     blocks: list[tuple[str, list[str]]] = []
     cur = None
+    preamble: list[str] = []
     for l in lines:
         m_inline = INLINE_ITEM.match(l)
         m = OZ_RX.match(l)
@@ -101,6 +156,10 @@ def parse_pdf(path) -> BoQ:
             blocks.append(cur)
         elif cur is not None:
             cur[1].append(l)
+        else:
+            preamble.append(l)
+    if len(preamble) > 3:
+        boq.notes.append({"ref": "Vorbemerkungen", "text": "\n".join(preamble)})
 
     section_oz, section_label = "", ""
     for head, body in blocks:
@@ -126,6 +185,8 @@ def parse_pdf(path) -> BoQ:
                 qty_idx = len(body) - 1
         if qty_idx is None:
             # heading / note
+            if len(body) >= 2:                   # heading with explanatory text = preliminary note
+                boq.notes.append({"ref": oz, "text": "\n".join([first] + body)})
             if first and len(first) < 120:
                 boq.sections[oz] = first
                 if oz.count(".") <= 1 or not section_oz:

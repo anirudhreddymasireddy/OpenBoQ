@@ -68,6 +68,7 @@ def parse_gaeb90(path) -> BoQ:
     section_oz, section_label, pending_section = "", "", None
     cur: Item | None = None
     long_buf: list[str] = []
+    preamble: list[str] = []
 
     def flush():
         nonlocal cur, long_buf
@@ -79,7 +80,9 @@ def parse_gaeb90(path) -> BoQ:
     for l in lines:
         rt = l[:2]
         body = l[2:72]
-        if rt in ("T0", "T1"):
+        if rt in ("T0", "T1", "T9"):
+            if rt == "T1":
+                preamble.append(body.strip())
             continue
         if rt == "00":
             dp = l[10:12].strip()
@@ -92,6 +95,8 @@ def parse_gaeb90(path) -> BoQ:
             boq.name = body[:40].strip() or boq.name
         elif rt == "02":
             boq.project = body[:60].strip()
+        elif rt == "03":
+            boq.client = body[:60].strip()
         elif rt == "11":
             flush()
             oz = _split_oz(l[2:11], mask[: len(l[2:11].rstrip())] if l[2:11].rstrip() else mask)
@@ -107,12 +112,14 @@ def parse_gaeb90(path) -> BoQ:
             oz = _split_oz(l[2:11], mask)
             flags = l[12:15]
             qty = _num(l[23:34], 3)
+            bad_qty = l[23:34].strip() and qty is None
             unit = l[34:38].strip()
             top = oz.split(".")[0]
             cur = Item(oz=oz, short_text="", qty=qty, unit=unit,
                        section=section_label or boq.sections.get(top, top), section_oz=section_oz or top,
                        provisional=any(c in flags for c in "EB"), alternative="A" in flags,
-                       lump_sum=unit.lower() in ("psch", "pa"))
+                       lump_sum=unit.lower() in ("psch", "pa"),
+                       issues=[f"Qty: '{l[23:34].strip()}'"] if bad_qty else [])
         elif rt == "23":
             oz23 = _split_oz(l[2:11], mask)
             if cur is None or cur.oz != oz23:      # bid files (D84) may carry prices only, no item records
@@ -131,6 +138,8 @@ def parse_gaeb90(path) -> BoQ:
         elif rt in ("31", "99"):
             flush()
     flush()
+    if any(preamble):
+        boq.notes.append({"ref": "Vorbemerkungen", "text": "\n".join(preamble).strip()})
     _fix_price_decimals(boq)
     return boq
 

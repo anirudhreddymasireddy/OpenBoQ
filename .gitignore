@@ -6,3 +6,7 @@ out/
 .venv/
 dataset/
 *.zip
+data/price_db.json
+data/feedback.db
+data/users.json
+data/rules.json

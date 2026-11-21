@@ -15,7 +15,7 @@ from . import knowledge as K
 from .fmt import de
 from .fmt import en as E
 from .model import BoQ, Flag, Item
-from .units import family, norm_unit
+from .units import family, is_known, norm_unit
 
 # Share of the item value assumed to be at risk, per finding type (heuristic, configurable).
 RISK = {
@@ -88,6 +88,8 @@ def check_units(boq: BoQ) -> list[Flag]:
         if not wt:
             continue
         fam = family(it.unit)
+        if fam not in ("volume", "area", "length", "count", "mass", "lump"):
+            continue                    # composite units (mWo, StWo, Jahr …) – no reliable expectation
         units = "/".join(sorted(wt.price)) or "m2/m3"
         if fam == "lump" and wt.measurable:
             out.append(Flag(
@@ -104,7 +106,7 @@ def check_units(boq: BoQ) -> list[Flag]:
         elif fam not in wt.families and fam != "unknown":
             usual = ", ".join(wt.price) or wt.families[0]
             out.append(Flag(
-                "R02", "Einheit passt nicht zur Leistung", "high",
+                "R02", "Einheit passt nicht zur Leistung", "medium",
                 f"„{it.short_text}“ ({wt.label}) in Einheit „{it.unit}“ – erwartet: {', '.join(wt.families)}.",
                 oz=it.oz, reference=f"VOB/C {wt.norm}, Abschnitt 0.5 (Abrechnungseinheiten)",
                 exposure_eur=RISK["unit_mismatch"] * it.total,
@@ -178,6 +180,8 @@ def check_duplicates(boq: BoQ) -> list[Flag]:
     texted = [it for it in items if len(it.short_text.strip()) >= 8]   # price-only bid files carry no texts
     for i, a in enumerate(texted):
         for b in texted[i + 1:]:
+            if a.section_oz != b.section_oz:
+                continue            # same item in different lots/sections is normal (e.g. site setup per lot)
             if norm_unit(a.unit) != norm_unit(b.unit):
                 continue
             if _nums(a.short_text) != _nums(b.short_text):
@@ -185,7 +189,9 @@ def check_duplicates(boq: BoQ) -> list[Flag]:
             s = fuzz.token_sort_ratio(a.short_text.lower(), b.short_text.lower())
             if s < 92:
                 continue
-            ls = fuzz.token_sort_ratio(a.long_text.lower(), b.long_text.lower()) if (a.long_text and b.long_text) else s
+            if len(a.long_text) < 25 or len(b.long_text) < 25:
+                continue            # short-text-only prints (bids): "wie vor, jedoch …" items differ in the unprinted long text
+            ls = fuzz.token_sort_ratio(a.long_text.lower(), b.long_text.lower())
             if ls < 90 or _nums(a.long_text) != _nums(b.long_text):
                 continue
             out.append(Flag(
@@ -213,12 +219,12 @@ def check_prices(boq: BoQ) -> list[Flag]:
             continue
         lo, hi = rng
         if it.up > hi * 1.5:
-            sev = "high" if it.up > hi * 3 else "medium"
+            sev = "low"     # reference ranges are placeholders until prices are learned from real projects
             out.append(Flag(
                 "R05", "Einheitspreis auffällig hoch", sev,
                 f"EP {de(it.up, 2)} €/{it.unit} liegt deutlich über dem Referenzbereich {de(lo, 0)}–{de(hi, 0)} €/{it.unit} für {wt.label}.",
                 oz=it.oz, reference="VOB/A § 16d Abs. 1 (ungewöhnlich hohe/niedrige Preise aufklären); Spekulationspreis?",
-                exposure_eur=(it.up - hi) * it.qty,
+                exposure_eur=(it.up - hi) * it.qty, data={"direction": "high", "up": it.up, "ref": hi, "factor": 1.5},
                 suggestion="Preisaufklärung beim Bieter; Mengenansatz auf Spekulationspotenzial prüfen.",
                 en=dict(title="Unit price unusually high",
                         message=f"Unit price €{E(it.up)}/{it.unit} is well above the reference range €{E(lo, 0)}–{E(hi, 0)}/{it.unit} "
@@ -226,11 +232,12 @@ def check_prices(boq: BoQ) -> list[Flag]:
                         suggestion="Ask the bidder to explain the price; check whether the quantity invites speculative pricing.")))
         elif it.up < lo / 1.5:
             out.append(Flag(
-                "R05", "Einheitspreis auffällig niedrig", "medium",
+                "R05", "Einheitspreis auffällig niedrig", "low",
                 f"EP {de(it.up, 2)} €/{it.unit} liegt deutlich unter dem Referenzbereich {de(lo, 0)}–{de(hi, 0)} €/{it.unit}. "
                 "Typisches Muster: Unterpreis bei Positionen, deren Menge der Bieter für überschätzt hält.",
                 oz=it.oz, reference="VOB/A § 16d Abs. 1",
-                exposure_eur=(lo - it.up) * it.qty, suggestion="Kalkulation anfordern; Menge plausibilisieren.",
+                exposure_eur=(lo - it.up) * it.qty, data={"direction": "low", "up": it.up, "ref": lo, "factor": 1 / 1.5},
+                suggestion="Kalkulation anfordern; Menge plausibilisieren.",
                 en=dict(title="Unit price unusually low",
                         message=f"Unit price €{E(it.up)}/{it.unit} is well below the reference range €{E(lo, 0)}–{E(hi, 0)}/{it.unit}. "
                                 "Typical pattern: underpricing items whose quantity the bidder believes is overestimated.",
@@ -250,8 +257,9 @@ def check_vague(boq: BoQ) -> list[Flag]:
             continue
         share = min(RISK["vague_cap"], RISK["vague"] * len(hits))
         labels = ", ".join(h[0] for h in hits)
+        weak_only = all(h[0] == "„ca.“" for h in hits)      # "ca." alone is common and usually minor
         out.append(Flag(
-            "R08", "Unbestimmte Formulierung", "medium",
+            "R08", "Unbestimmte Formulierung", "low" if weak_only else "medium",
             f"{labels}: " + " | ".join(h[1] for h in hits),
             oz=it.oz, reference="VOB/A § 7 Abs. 1 Nr. 1 (eindeutig und erschöpfend); VOB/B § 2 Abs. 5/6",
             exposure_eur=share * it.total, suggestion="Konkrete Mengen, Maße und Qualitäten angeben.",
@@ -265,8 +273,8 @@ def check_parameters(boq: BoQ) -> list[Flag]:
     out = []
     for it in boq.items:
         wt = _wt(it)
-        if not wt or not wt.params:
-            continue
+        if not wt or not wt.params or len(it.long_text.strip()) < 25:
+            continue                    # without a long text (bid print-outs) we cannot judge completeness
         txt = it.text.lower()
         missing = [(n, why) for n, rx, why in wt.params if not re.search(rx, txt)]
         if not missing:
@@ -337,6 +345,8 @@ def check_completeness(boq: BoQ) -> list[Flag]:
         if not conc or re.search(rx, formwork_txt):
             continue
         vol = sum((i.qty or 0) for i in conc if norm_unit(i.unit) == "m3")
+        if vol <= 0:
+            continue                    # concrete only as pieces (precast) – no formwork expectation
         area = vol * K.FORMWORK_RATIO.get(member, 4)
         ozs = ", ".join(i.oz for i in conc)
         m_en = K.MEMBER_EN.get(member, member)
@@ -355,8 +365,9 @@ def check_completeness(boq: BoQ) -> list[Flag]:
 
     # 2) reinforced concrete without rebar
     rc = [i for i in keys["beton"] if "stahlbeton" in i.text.lower()]
-    if rc and not keys["betonstahl"]:
-        vol = sum((i.qty or 0) for i in rc if norm_unit(i.unit) == "m3")
+    rc_vol = sum((i.qty or 0) for i in rc if norm_unit(i.unit) == "m3")
+    if rc and rc_vol > 0 and not keys["betonstahl"]:
+        vol = rc_vol
         t = vol * K.REF_REBAR_T_PER_M3
         out.append(Flag(
             "R10", "Bewehrung fehlt", "high",
@@ -429,13 +440,227 @@ def check_completeness(boq: BoQ) -> list[Flag]:
     return out
 
 
+# ---------------------------------------------------------------- cent prices (no history needed)
+
+PRICE_FLOOR = {"m3": 1.0, "t": 1.0, "St": 1.0, "psch": 1.0, "h": 1.0, "d": 1.0, "Wo": 1.0, "Mt": 1.0, "m2": 0.3}
+
+
+def check_cent_prices(boq: BoQ) -> list[Flag]:
+    """Unit prices below any plausible cost (e.g. €0.95/t, €0.05/m³): decimal typo or speculative pricing."""
+    out = []
+    for it in boq.items:
+        u = norm_unit(it.unit)
+        floor = PRICE_FLOOR.get(u)
+        if floor is None or not it.up or it.up <= 0 or not it.qty or it.provisional:
+            continue
+        if it.up < floor:
+            out.append(Flag(
+                "R25", "Cent-Preis – unplausibel niedrig", "high",
+                f"EP {de(it.up, 2)} €/{it.unit} für „{it.short_text[:70]}“ liegt unter jedem realistischen Kostensatz "
+                f"(Schwelle {de(floor, 2)} €/{u}). Kommafehler oder Spekulationspreis: Steigt die Menge, entsteht Verlust; "
+                "fällt sie weg, wurde der Betrag in andere Positionen verschoben.",
+                oz=it.oz, reference="VOB/A § 16d Abs. 1 (unangemessen niedrige Preise); VOB/B § 2 Abs. 3",
+                suggestion="Kalkulation dieser Position prüfen – vor Angebotsabgabe korrigieren.",
+                en=dict(title="Cent price – implausibly low",
+                        message=f"Unit price €{E(it.up)}/{it.unit} for '{it.short_text[:70]}' is below any realistic cost "
+                                f"(threshold €{E(floor)}/{u}). Decimal typo or speculative price: if the quantity grows you lose money; "
+                                "if it disappears, the amount was shifted into other items.",
+                        suggestion="Check the calculation of this item – correct it before submitting the bid.")))
+    return out
+
+
+# ---------------------------------------------------------------- data-quality checks
+
+def check_parse_issues(boq: BoQ) -> list[Flag]:
+    out = []
+    for it in boq.items:
+        if it.issues:
+            out.append(Flag("R21", "Wert nicht lesbar", "high",
+                            f"Feld(er) mit ungültigem Zahlenformat: {', '.join(it.issues)} – Wert wurde nicht übernommen.",
+                            oz=it.oz, reference="GAEB DA XML / Datenqualität",
+                            suggestion="Wert im Quell-LV korrigieren (Tippfehler, Buchstabe statt Ziffer, doppeltes Komma).",
+                            en=dict(title="Unreadable value",
+                                    message=f"Field(s) with invalid number format: {', '.join(it.issues)} – value was not taken over.",
+                                    suggestion="Correct the value in the source BoQ (typo, letter instead of digit, double comma).")))
+    return out
+
+
+def check_value_format(boq: BoQ) -> list[Flag]:
+    out = []
+    for it in boq.items:
+        u = norm_unit(it.unit)
+        if it.unit and not is_known(it.unit):
+            out.append(Flag("R22", "Unbekannte Einheit", "medium", f"Einheit „{it.unit}“ ist keine übliche Abrechnungseinheit – Tippfehler?",
+                            oz=it.oz, reference="VOB/C ATV Abschnitt 0.5", suggestion="Einheit prüfen.",
+                            en=dict(title="Unknown unit", message=f"Unit '{it.unit}' is not a usual billing unit – typo?",
+                                    suggestion="Check the unit.")))
+        if it.qty is None:
+            continue
+        if u in ("St", "Satz") and abs(it.qty - round(it.qty)) > 1e-9:
+            out.append(Flag("R22", "Stückzahl mit Nachkommastellen", "medium",
+                            f"{de(it.qty, 3)} {it.unit} – eine Stückzahl sollte ganzzahlig sein. Tippfehler oder falsche Einheit?",
+                            oz=it.oz, reference="Plausibilität Vordersatz", suggestion="Menge oder Einheit korrigieren.",
+                            en=dict(title="Count with decimals",
+                                    message=f"{E(it.qty, 3)} {it.unit} – a count should be a whole number. Typo or wrong unit?",
+                                    suggestion="Correct the quantity or the unit.")))
+        if u == "psch" and it.qty not in (1, 1.0) and it.qty > 0:
+            out.append(Flag("R22", "Pauschale mit Menge ≠ 1", "medium",
+                            f"Pauschalposition mit Menge {it.qty:g} – üblich ist 1 psch.",
+                            oz=it.oz, reference="Plausibilität Vordersatz", suggestion="Menge auf 1 setzen oder Einheit prüfen.",
+                            en=dict(title="Lump sum with quantity ≠ 1", message=f"Lump-sum item with quantity {it.qty:g} – usually 1 psch.",
+                                    suggestion="Set the quantity to 1 or check the unit.")))
+    return out
+
+
+def check_currency(boq: BoQ) -> list[Flag]:
+    out = []
+    cur = (boq.currency or "").strip().upper()
+    if cur and cur not in ("EUR", "EURO", "€"):
+        out.append(Flag("R23", "Währung nicht EUR", "high", f"LV-Währung „{boq.currency}“.",
+                        reference="GAEB PrjInfo/Cur", suggestion="Währung und Umrechnung prüfen.",
+                        en=dict(title="Currency is not EUR", message=f"BoQ currency '{boq.currency}'.",
+                                suggestion="Check the currency and conversion.")))
+    rx = re.compile(r"\b(\d[\d.,]*)\s*(DM|USD|CHF|GBP|\$|£)(?=\W|$)|\b(DM|USD|CHF|GBP)\s*\d", re.I)
+    for it in boq.items:
+        m = rx.search(it.text)
+        if m:
+            out.append(Flag("R23", "Fremdwährung im Text", "medium", f"Betrag in anderer Währung im Positionstext: „{m.group(0)}“.",
+                            oz=it.oz, reference="Eindeutigkeit der Preisangaben", suggestion="Betrag in EUR angeben.",
+                            en=dict(title="Foreign currency in text", message=f"Amount in another currency in the item text: '{m.group(0)}'.",
+                                    suggestion="State the amount in EUR.")))
+    return out
+
+
+def check_injection(boq: BoQ) -> list[Flag]:
+    """Hidden instructions aimed at AI review tools, and invisible characters."""
+    out = []
+    sources = [(it.oz, it.text) for it in boq.items] + [("", n["text"]) for n in boq.notes]
+    for oz, text in sources:
+        low = text.lower()
+        m = re.search(K.INJECTION, low)
+        inv = re.findall(K.INVISIBLE, text)
+        if m:
+            out.append(Flag("S01", "Versteckte Anweisung an KI-Systeme", "high",
+                            f"Text enthält eine Anweisung an KI-Werkzeuge: „…{text[max(0, m.start()-30):m.end()+30]}…“. "
+                            "Wird bei der KI-Prüfung als Daten behandelt, nicht befolgt.",
+                            oz=oz, reference="Manipulationsversuch (Prompt Injection)",
+                            suggestion="Herkunft des Textes klären; dem AG melden.",
+                            en=dict(title="Hidden instruction aimed at AI tools",
+                                    message=f"Text contains an instruction to AI tools: '…{text[max(0, m.start()-30):m.end()+30]}…'. "
+                                            "It is treated as data during the AI review, never followed.",
+                                    suggestion="Clarify where the text comes from; report it to the client.")))
+        if len(inv) >= 3:
+            out.append(Flag("S02", "Unsichtbare Zeichen im Text", "medium",
+                            f"{len(inv)} unsichtbare Steuerzeichen gefunden – können Text verbergen oder Vergleiche verfälschen.",
+                            oz=oz, reference="Datenintegrität", suggestion="Text bereinigen und Original prüfen.",
+                            en=dict(title="Invisible characters in text",
+                                    message=f"{len(inv)} invisible control characters found – they can hide text or distort comparisons.",
+                                    suggestion="Clean the text and check the original.")))
+    return out
+
+
+# ---------------------------------------------------------------- contract-risk clauses (contractor's view)
+
+def _is_public(boq: BoQ) -> bool:
+    blob = " ".join([boq.project, boq.client, boq.name] + [n["text"][:3000] for n in boq.notes[:20]]).lower()
+    return bool(re.search(K.PUBLIC_CLIENT, blob))
+
+
+def _snippet(text: str, m) -> str:
+    start = max(text.rfind(".", 0, m.start()) + 1, m.start() - 160)
+    if start > 0 and text[start - 1].isalnum():          # don't start mid-word
+        nxt = text.find(" ", start)
+        start = nxt + 1 if 0 <= nxt < m.start() else start
+    end = text.find(".", m.end())
+    end = len(text) if end == -1 else min(end + 1, m.end() + 200)
+    return re.sub(r"\s+", " ", text[start:end]).strip()
+
+
+def check_clauses(boq: BoQ) -> list[Flag]:
+    out = []
+    public = _is_public(boq)
+    sources = [(it.oz, it.text, it.total, "Pos.") for it in boq.items] + \
+              [("", n["text"], 0.0, f"Vorbemerkung {n['ref']}") for n in boq.notes]
+    seen = set()
+    for oz, text, value, where in sources:
+        low = text.lower()
+        for key, rx, weight, t_de, t_en, why_de, why_en, q_de, q_en in K.CLAUSES:
+            m = re.search(rx, low)
+            if not m:
+                continue
+            snip = _snippet(text, m)
+            sig = (key, snip[:80])
+            if sig in seen:
+                continue
+            seen.add(sig)
+            sev = "medium" if public and key not in ("no_claims", "ground_risk") else "high"
+            if key in ("site_knowledge", "price_lock", "one_sided") and public:
+                sev = "low"
+            ctx_de = "Öffentlicher AG – an VOB/A § 7 (kein ungewöhnliches Wagnis) gebunden." if public else \
+                     "Privater AG – Klausel nur über AGB-Recht (§ 307 BGB) angreifbar, daher einpreisen."
+            ctx_en = "Public client – bound by VOB/A § 7 (no unusual risk)." if public else \
+                     "Private client – clause only contestable under standard-terms law (§ 307 BGB), so price it in."
+            loc_de = where if not oz else f"Pos. {oz}"
+            loc_en = where.replace("Vorbemerkung", "Preliminary note") if not oz else f"Item {oz}"
+            f = Flag("R20", f"Vertragsrisiko: {t_de}", sev,
+                     f"{loc_de}: „{snip}“ – {why_de} {ctx_de}",
+                     oz=oz, reference="VOB/A § 7 Abs. 1 Nr. 3; VOB/B § 2; § 307 BGB",
+                     exposure_eur=weight * value,
+                     suggestion="Risiko einpreisen oder als Bieterfrage klären.",
+                     en=dict(title=f"Contract risk: {t_en}", message=f"{loc_en}: '{snip}' – {why_en} {ctx_en}",
+                             suggestion="Price the risk in or clarify it with a bidder question."))
+            f.question = {"de": f"{loc_de}: „{snip[:160]}“ – {q_de}", "en": f"{loc_en}: '{snip[:160]}' – {q_en}"}
+            out.append(f)
+    return out
+
+
 ITEM_RULES = [check_arithmetic, check_units, check_quantities, check_special_items, check_duplicates,
-              check_prices, check_vague, check_parameters, check_outdated, check_long_text]
-LV_RULES = [check_completeness]
+              check_prices, check_vague, check_parameters, check_outdated, check_long_text,
+              check_parse_issues, check_value_format, check_currency, check_cent_prices]
+LV_RULES = [check_completeness, check_clauses, check_injection]
+
+# contractor's view: what kind of finding is it?
+CATEGORY = {"R01": "error", "R04": "error", "R06": "error", "R12": "error", "R13": "error", "R21": "error", "R22": "error",
+            "R23": "error", "R02": "error", "R05": "error", "R24": "risk", "R25": "error",
+            "R03": "risk", "R09": "risk", "R11": "risk", "R20": "risk", "R07": "risk",
+            "R08": "opportunity", "R10": "opportunity", "R14": "opportunity", "R15": "opportunity", "R16": "risk",
+            "S01": "security", "S02": "security"}
+
+
+def _question(f: Flag, boq: BoQ) -> dict:
+    """Bidder question (Bieterfrage) for findings that need clarification before pricing."""
+    if f.question:
+        return f.question
+    t_de, m_de, _ = f.txt("de")
+    t_en, m_en, _ = f.txt("en")
+    loc_de = f"Pos. {f.oz}" if f.oz else "LV"
+    loc_en = f"Item {f.oz}" if f.oz else "BoQ"
+    if f.rule_id == "R08":
+        return {"de": f"{loc_de}: Die Beschreibung ist nicht eindeutig ({m_de.split(':')[0]}). Bitte konkretisieren Sie Umfang, Maße und Qualität.",
+                "en": f"{loc_en}: The description is ambiguous ({m_en.split(':')[0]}). Please specify scope, dimensions and quality."}
+    if f.rule_id == "R09":
+        return {"de": f"{loc_de}: {t_de.replace('Pflichtangabe fehlt: ', 'Es fehlt die Angabe ')}. Bitte ergänzen Sie diese für eine eindeutige Kalkulation.",
+                "en": f"{loc_en}: {t_en.replace('Mandatory detail missing: ', 'The ')} is missing. Please add it so the item can be priced unambiguously."}
+    if f.rule_id == "R10":
+        return {"de": f"{loc_de}: {t_de}. Ist diese Leistung in anderen Positionen enthalten oder wird sie gesondert vergütet?",
+                "en": f"{loc_en}: {t_en}. Is this work included in other items or will it be paid separately?"}
+    if f.rule_id in ("R02", "R03", "R22"):
+        return {"de": f"{loc_de}: {t_de} – bitte bestätigen Sie Einheit und Vordersatz.",
+                "en": f"{loc_en}: {t_en} – please confirm the unit and quantity."}
+    if f.rule_id == "R11":
+        return {"de": f"{loc_de}: {t_de}. Welcher aktuelle Normstand gilt für die Ausführung?",
+                "en": f"{loc_en}: {t_en}. Which current standard applies to the execution?"}
+    if f.rule_id in ("R04", "R12") and f.severity in ("high", "medium"):
+        return {"de": f"{loc_de}: {t_de} – bitte um Klarstellung.", "en": f"{loc_en}: {t_en} – please clarify."}
+    return {}
 
 
 def run_rules(boq: BoQ) -> list[Flag]:
     flags: list[Flag] = []
     for fn in ITEM_RULES + LV_RULES:
         flags.extend(fn(boq))
+    for f in flags:
+        f.category = f.category or CATEGORY.get(f.rule_id, "risk")
+        if f.severity in ("high", "medium"):
+            f.question = _question(f, boq)
     return flags

@@ -24,6 +24,7 @@ class Item:
     hourly: bool = False         # Stundenlohnarbeiten (GAEB <HourIt>)
     stlb: bool = False           # Item carries an STLB-Bau reference (standardised text)
     raw_id: str = ""             # GAEB ID attribute, for write-back
+    issues: list = field(default_factory=list)   # parse problems, e.g. "Menge unlesbar: '1,5,0'"
 
     @property
     def text(self) -> str:
@@ -53,6 +54,18 @@ class Flag:
     source: str = "rules"        # "rules" | "ifc" | "llm"
     confidence: float = 1.0
     en: dict = field(default_factory=dict)   # English texts: {"title", "message", "suggestion"}
+    category: str = ""           # "error" | "risk" | "opportunity" | "security" (contractor view)
+    question: dict = field(default_factory=dict)   # bidder question {"de": ..., "en": ...}
+    decision: dict = field(default_factory=dict)   # {"status": confirmed|dismissed, "by", "at", "reason", "source"}
+    learned: dict = field(default_factory=dict)    # calibration note {"de", "en"} when severity was lowered
+    data: dict = field(default_factory=dict)       # machine-readable details (e.g. price ratio) for rules
+    fp: str = ""                 # stable fingerprint, used to remember decisions across runs
+    status: str = "open"         # open | confirmed | dismissed | suppressed
+    status_note: str = ""        # why (reason of the decision / rule that suppressed it)
+
+    @property
+    def active(self) -> bool:
+        return self.status in ("open", "confirmed")
 
     def txt(self, lang: str = "de") -> tuple[str, str, str]:
         """(title, message, suggestion) in the requested language, German as fallback."""
@@ -73,6 +86,8 @@ class BoQ:
     phase: str = ""              # GAEB data phase: 81, 83, 84, 86 ...
     items: list[Item] = field(default_factory=list)
     sections: dict[str, str] = field(default_factory=dict)  # section_oz -> label
+    notes: list[dict] = field(default_factory=list)          # preliminary notes / remarks: {"ref", "text"}
+    client: str = ""                                         # Auftraggeber, if known
 
     @property
     def total(self) -> float:

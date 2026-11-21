@@ -6,7 +6,7 @@ from collections import defaultdict
 from pathlib import Path
 
 from .fmt import money, num
-from .i18n import T, sev_label, src_label
+from .i18n import T, category_counts, questions, sev_label, src_label
 from .pipeline import Result
 
 SEV_LABEL = {"high": "Hoch", "medium": "Mittel", "low": "Gering", "info": "Info"}   # kept for older imports
@@ -79,9 +79,18 @@ def to_html(res: Result, lang: str = "de") -> str:
         blocks.append(_item_block(T("lv_wide", lang), T("lv_wide_title", lang), None, by_oz[""], lang))
     for it in boq.items:
         if it.oz in by_oz:
-            blocks.append(_item_block(it.oz, it.short_text, it, by_oz[it.oz], lang))
+            blocks.append(_item_block(it.oz, it.short_text, it, by_oz[it.oz], lang, res.price_suggestions.get(it.oz)))
 
     summary = f'<p class="summary">{_e(res.summary)}</p>' if res.summary else ""
+    cats = category_counts(res.flags)
+    if boq.total > 0:
+        hero = (f'<div class="kpi hero"><div class="l">{T("risk", lang)}</div><div class="v">{eur(res.exposure, lang)}</div>'
+                f'<div class="l">{_pct(share, lang)} {T("of_total", lang)}</div></div>')
+    else:
+        hero = (f'<div class="kpi hero"><div class="l">{T("hero_unpriced", lang)}</div><div class="v">{len(risk)} / {len(boq.items)}</div>'
+                f'<div class="l">{T("hero_unpriced_sub", lang)}</div></div>')
+    qs = questions(res.flags, lang)
+    q_html = ("<ol class='qs'>" + "".join(f"<li>{_e(q)}</li>" for q in qs) + "</ol>") if qs else f"<p>{T('no_questions', lang)}</p>"
 
     return f"""<!DOCTYPE html><html lang="{lang}"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>OpenBoQ – {_e(boq.project or boq.name)}</title>
@@ -92,7 +101,8 @@ def to_html(res: Result, lang: str = "de") -> str:
 header{{display:flex;justify-content:space-between;align-items:flex-end;gap:16px;flex-wrap:wrap;border-bottom:2px solid var(--ink);padding-bottom:14px}}
 .brand{{font-weight:800;letter-spacing:.02em;font-size:13px;text-transform:uppercase;color:var(--muted)}}
 h1{{margin:4px 0 0;font-size:26px;line-height:1.2}}.meta{{color:var(--muted);font-size:13px;text-align:right}}
-.kpis{{display:grid;grid-template-columns:2fr 1fr 1fr 1fr;gap:12px;margin:22px 0}}
+.kpis{{display:grid;grid-template-columns:2fr 1fr 1fr 1fr 1fr;gap:12px;margin:22px 0}}
+.qs{{margin:0 0 10px 0;padding-left:22px;font-size:13.5px}}.qs li{{margin:6px 0}}
 .kpi{{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:16px}}
 .kpi .v{{font-size:28px;font-weight:800;font-variant-numeric:tabular-nums}}.kpi .l{{color:var(--muted);font-size:13px}}
 .kpi.hero{{background:var(--ink);color:#fff;border-color:var(--ink)}}.kpi.hero .l{{color:#c9cfdb}}.kpi.hero .v{{font-size:38px}}
@@ -119,13 +129,15 @@ table.t{{width:100%;border-collapse:collapse;font-size:13.5px}}.t th{{text-align
 <div class="msg">{_e(boq.name)} · GAEB DA {_e(boq.phase or "–")} · {len(boq.items)} {T("items", lang)}</div></div>
 <div class="meta">{T("lv_sum", lang)} {eur(boq.total, lang)}<br>{T("analysis_in", lang)} {_dur(res.seconds, lang)}</div></header>
 <div class="kpis">
-<div class="kpi hero"><div class="l">{T("risk", lang)}</div><div class="v">{eur(res.exposure, lang)}</div><div class="l">{_pct(share, lang)} {T("of_total", lang)}</div></div>
-<div class="kpi"><div class="v" style="color:var(--high)">{sev['high']}</div><div class="l">{T("high", lang)}</div></div>
-<div class="kpi"><div class="v" style="color:var(--med)">{sev['medium']}</div><div class="l">{T("medium", lang)}</div></div>
-<div class="kpi"><div class="v">{len(risk)}</div><div class="l">{T("affected", lang)}</div></div>
+{hero}
+<div class="kpi"><div class="v" style="color:var(--high)">{cats['error']}</div><div class="l">{T("k_errors", lang)}</div></div>
+<div class="kpi"><div class="v" style="color:var(--med)">{cats['risk']}</div><div class="l">{T("k_risks", lang)}</div></div>
+<div class="kpi"><div class="v" style="color:var(--ok)">{cats['opportunity']}</div><div class="l">{T("k_opps", lang)}</div></div>
+<div class="kpi"><div class="v">{len(qs)}</div><div class="l">{T("k_questions", lang)}</div></div>
 </div>
 {summary}
 <section><h2>{T("top", lang)} <small>{T("by_eur", lang)}</small></h2><table class="t"><tbody>{top_rows}</tbody></table></section>
+<section><h2>{T("questions_title", lang)} <small>{T("questions_hint", lang)}</small></h2>{q_html}</section>
 <section><h2>{T("by_type", lang)}</h2>{bars}<div style="height:8px"></div></section>
 {ifc_html}
 <section><h2>{T("all", lang)} <small>{T("in_order", lang)}</small></h2>{''.join(blocks)}</section>
@@ -133,16 +145,25 @@ table.t{{width:100%;border-collapse:collapse;font-size:13.5px}}.t th{{text-align
 </div></body></html>"""
 
 
-def _item_block(oz, title, it, flags, lang) -> str:
+def _item_block(oz, title, it, flags, lang, sugg=None) -> str:
     q = ""
     if it is not None and it.qty is not None:
         q = (f"{num(it.qty, 2, lang)} {it.unit} × {eur_cents(it.up or 0, lang)} = {eur_cents(it.total, lang)}")
+    if sugg is not None:
+        q += (f" · {T('sugg_line', lang)}: {eur_cents(sugg.median, lang)} "
+              f"({eur_cents(sugg.lo, lang)}–{eur_cents(sugg.hi, lang)}, n={sugg.n})")
     rows = []
     for f in flags:
         t, m, s = f.txt(lang)
+        if f.learned:
+            m = f"{m} [{f.learned.get(lang, '')}]"
+        if f.decision:
+            d = f.decision
+            word = T("d_confirm" if d["status"] == "confirmed" else "d_dismiss", lang)
+            m = f"{m} [{word} – {T('decided_by', lang)} {d.get('by', '–')} {d.get('at', '')}" + (f": {d['reason']}" if d.get("reason") else "") + "]"
         rows.append(
             f'<div class="f"><div><span class="sev {f.severity}">{sev_label(f.severity, lang)}</span></div>'
-            f'<div><b>{_e(t)}</b><span class="src">{src_label(f.source, lang)} {_e(f.rule_id)}</span>'
+            f'<div><b>{_e(t)}</b><span class="src">{T("cat_" + (f.category or "risk"), lang)} · {src_label(f.source, lang)} {_e(f.rule_id)}</span>'
             f'<div class="msg">{_e(m)}</div>'
             f'{f"<div class=ref>{_e(f.reference)}</div>" if f.reference else ""}'
             f'{f"<div class=sug>{_e(s)}</div>" if s else ""}</div>'
@@ -164,6 +185,8 @@ def to_excel(res: Result, path, lang: str = "de") -> Path:
         T("c_light", lang): sev_label(risk[i.oz]["severity"], lang) if i.oz in risk else "ok",
         T("c_risk", lang): round(risk.get(i.oz, {}).get("exposure", 0.0), 2),
         T("c_count", lang): risk.get(i.oz, {}).get("n", 0),
+        T("c_sugg", lang): round(res.price_suggestions[i.oz].median, 2) if i.oz in res.price_suggestions else None,
+        T("c_sugg_n", lang): res.price_suggestions[i.oz].n if i.oz in res.price_suggestions else None,
     } for i in res.boq.items]
     fl = []
     for f in res.flags:
@@ -172,6 +195,11 @@ def to_excel(res: Result, path, lang: str = "de") -> Path:
                    "Rule": f.rule_id, T("f_source", lang): src_label(f.source, lang), T("c_finding", lang): t,
                    T("c_expl", lang): m, T("c_basis", lang): f.reference, T("c_fix", lang): s,
                    T("c_risk", lang): round(f.exposure_eur, 2)})
+    from openpyxl.cell.cell import ILLEGAL_CHARACTERS_RE
+
+    def clean(rows):
+        return [{k: (ILLEGAL_CHARACTERS_RE.sub("", v) if isinstance(v, str) else v) for k, v in r.items()} for r in rows]
+    fl, pos = clean(fl), clean(pos)
     out = Path(path)
     with pd.ExcelWriter(out, engine="openpyxl") as xw:
         pd.DataFrame(fl or [{T("c_finding", lang): "–"}]).to_excel(xw, sheet_name=T("sheet_findings", lang), index=False)
