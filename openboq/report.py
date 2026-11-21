@@ -51,26 +51,6 @@ def to_html(res: Result, lang: str = "de") -> str:
         f'<td><b>{_e(f.txt(lang)[0])}</b><div class="msg">{_e(f.txt(lang)[1])}</div></td><td class="num">{eur(f.exposure_eur, lang)}</td></tr>'
         for f in top)
 
-    ifc_html = ""
-    if res.ifc_table:
-        rows = []
-        for r in res.ifc_table:
-            dev = r["Abweichung"]
-            cls = {"deviation": "high", "missing_in_lv": "high", "watch": "medium", "missing_in_model": "low"}.get(r["Status"], "ok")
-            group = r["Prüfgruppe"]
-            if lang == "en":
-                from .ifc_check import MAPPING_EN
-                group = MAPPING_EN.get(group, group)
-            rows.append(
-                f'<tr><td>{_e(group)}</td><td class="num">{r["Bauteile"]}</td>'
-                f'<td class="num">{num(r["Modell"], 1, lang)}</td><td class="num">{num(r["LV"], 1, lang)}</td><td>{_e(r["Einheit"])}</td>'
-                f'<td class="num">{"" if dev is None else _pct(dev, lang, True)}</td>'
-                f'<td><span class="sev {cls}">{T("st_" + r["Status"], lang)}</span></td></tr>')
-        cols = "".join(f"<th>{T(c, lang)}</th>" for c in ("col_group", "col_elements", "col_model", "col_lv", "col_unit", "col_dev", "col_status"))
-        ifc_html = f"""
-        <section><h2>{T("ifc_title", lang)} <small>IFC · VOB/B § 2 Abs. 3</small></h2>
-        <table class="t"><thead><tr>{cols}</tr></thead><tbody>{''.join(rows)}</tbody></table></section>"""
-
     by_oz = defaultdict(list)
     for f in res.flags:
         by_oz[f.oz].append(f)
@@ -141,7 +121,6 @@ table.t{{width:100%;border-collapse:collapse;font-size:13.5px}}.t th{{text-align
 <section><h2>{T("top", lang)} <small>{T("by_eur", lang)}</small></h2><table class="t"><tbody>{top_rows}</tbody></table></section>
 <section><h2>{T("questions_title", lang)} <small>{T("questions_hint", lang)}</small></h2>{q_html}</section>
 <section><h2>{T("by_type", lang)}</h2>{bars}<div style="height:8px"></div></section>
-{ifc_html}
 <section><h2>{T("all", lang)} <small>{T("in_order", lang)}</small></h2>{''.join(blocks)}</section>
 <p class="note">{T("note", lang)}</p>
 </div></body></html>"""
@@ -277,8 +256,6 @@ def to_excel(res: Result, path, lang: str = "de") -> Path:
     with pd.ExcelWriter(out, engine="openpyxl") as xw:
         pd.DataFrame(fl or [{T("c_finding", lang): "–"}]).to_excel(xw, sheet_name=T("sheet_findings", lang), index=False)
         pd.DataFrame(pos or [{T("c_oz", lang): "–"}]).to_excel(xw, sheet_name=T("sheet_items", lang), index=False)
-        if res.ifc_table:
-            pd.DataFrame(res.ifc_table).to_excel(xw, sheet_name=T("sheet_ifc", lang), index=False)
         if getattr(res, "project_notes", None):
             pd.DataFrame(notes_rows(res.project_notes, lang)).to_excel(
                 xw, sheet_name="Projekt-Hinweise" if lang == "de" else "Project notes", index=False)

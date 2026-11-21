@@ -1,4 +1,4 @@
-"""One call: BoQ (+ optional IFC, + optional LLM) -> findings, per-item risk, headline numbers."""
+"""One call: BoQ (+ optional LLM) -> findings, per-item risk, headline numbers."""
 from __future__ import annotations
 
 import os
@@ -16,7 +16,6 @@ SEV_RANK = {"high": 3, "medium": 2, "low": 1, "info": 0}
 class Result:
     boq: BoQ
     flags: list[Flag]
-    ifc_table: list[dict] = field(default_factory=list)
     price_suggestions: dict = field(default_factory=dict)   # oz -> prices.Suggestion
     llm_errors: list = field(default_factory=list)           # AI batches that failed (e.g. rate limit)
     project_notes: list = field(default_factory=list)        # cross-file observations (crossfile.project_notes)
@@ -120,7 +119,7 @@ def _merge_ai_duplicates(flags):
     return out
 
 
-def analyze(boq: BoQ, ifc=None, use_llm: bool = False, llm_client=None, model: Optional[str] = None,
+def analyze(boq: BoQ, use_llm: bool = False, llm_client=None, model: Optional[str] = None,
             lang: str = "de", prices="auto", source: str = "", feedback="auto", rules="auto",
             meta: dict | None = None, history="auto") -> Result:
     """prices: a prices.PriceModel, None (off) or "auto" (load data/price_db.json if it exists).
@@ -150,11 +149,6 @@ def analyze(boq: BoQ, ifc=None, use_llm: bool = False, llm_client=None, model: O
         from .history import check_history
         f_h, hinfo = check_history(boq, history, sugg)
         flags += f_h
-    table: list[dict] = []
-    if ifc is not None:
-        from .ifc_check import check_ifc
-        f2, table = check_ifc(boq, ifc)
-        flags += f2
     summary = ""
     llm_errors: list[str] = []
     if use_llm:
@@ -201,4 +195,4 @@ def analyze(boq: BoQ, ifc=None, use_llm: bool = False, llm_client=None, model: O
         from .userrules import apply_rules
         apply_rules(flags, boq, rules, meta or {})
     flags.sort(key=lambda f: (-SEV_RANK[f.severity], -f.exposure_eur))
-    return Result(boq=boq, flags=flags, ifc_table=table, summary=summary, seconds=time.time() - t0, price_suggestions=sugg, llm_errors=llm_errors, history_info=hinfo, history_model=history)
+    return Result(boq=boq, flags=flags, summary=summary, seconds=time.time() - t0, price_suggestions=sugg, llm_errors=llm_errors, history_info=hinfo, history_model=history)

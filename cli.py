@@ -2,7 +2,7 @@
 
 Examples
   python cli.py demo                               # build sample data, plant errors, analyse, write report
-  python cli.py analyze LV.X84 --ifc model.ifc     # analyse your own files
+  python cli.py analyze LV.X84                     # analyse your own files
   python cli.py analyze LV.X84 --llm               # + Claude semantic checks (needs ANTHROPIC_API_KEY)
   python cli.py analyze LV.pdf --lang en           # report and findings in English
   python cli.py batch dataset --lang en            # analyse every file in a folder (one report each in out/)
@@ -23,7 +23,6 @@ from openboq.pipeline import analyze
 from openboq.i18n import T
 from openboq.report import eur, to_excel, write_html
 from openboq.sample import make_sample_boq
-from openboq.sample_ifc import make_sample_ifc
 
 DATA = Path(__file__).parent / "data"
 OUT = Path(__file__).parent / "out"
@@ -37,10 +36,9 @@ def cmd_demo(args):
     buggy, truth = inject(clean, n_item=args.errors, n_lv=2, seed=args.seed)
     write_gaeb(buggy, DATA / "sample_buggy.X84")
     (DATA / "ground_truth.json").write_text(json.dumps(truth, indent=2, ensure_ascii=False), encoding="utf-8")
-    make_sample_ifc(DATA / "sample_model.ifc")
     boq = load_boq(DATA / "sample_buggy.X84")
     L = args.lang
-    res = analyze(boq, ifc=DATA / "sample_model.ifc", use_llm=args.llm, lang=L, prices=None)
+    res = analyze(boq, use_llm=args.llm, lang=L, prices=None)
     write_html(res, OUT / "report.html", L)
     to_excel(res, OUT / "report.xlsx", L)
     print(f"{len(boq.items)} {T('items', L)}, {T('lv_sum', L)} {eur(boq.total, L)}")
@@ -58,7 +56,7 @@ def cmd_analyze(args):
         print("AI:", describe() if llm_checks.provider() == "chain" else llm_checks.provider_label())
         llm_checks.PROGRESS = lambda d, n, who, sec: print(
             f"  AI {d}/{n}  {who}  {sec:.0f} s" if d else f"  AI: {who}, {n} requests", flush=True)
-    res = analyze(boq, ifc=args.ifc, use_llm=args.llm, lang=L, source=Path(args.file).name)
+    res = analyze(boq, use_llm=args.llm, lang=L, source=Path(args.file).name)
     for e in res.llm_errors:
         print("  ! AI batch skipped:", e)
     stem = Path(args.file).name.replace(".", "_")   # keep extension: X.pdf and X.D84 must not overwrite each other
@@ -179,7 +177,7 @@ def main():
     d = sub.add_parser("demo"); d.add_argument("--errors", type=int, default=10); d.add_argument("--seed", type=int, default=1)
     d.add_argument("--llm", action="store_true"); d.add_argument("--lang", choices=["de", "en"], default="de")
     d.set_defaults(fn=cmd_demo)
-    a = sub.add_parser("analyze"); a.add_argument("file"); a.add_argument("--ifc"); a.add_argument("--llm", action="store_true")
+    a = sub.add_parser("analyze"); a.add_argument("file"); a.add_argument("--llm", action="store_true")
     a.add_argument("--top", type=int, default=25); a.add_argument("--lang", choices=["de", "en"], default="de")
     a.set_defaults(fn=cmd_analyze)
     au = sub.add_parser("adduser", help="create or update a dashboard login")

@@ -222,9 +222,15 @@ class ChainClient:
         with self._lock:
             now = time.time()
             fast = [(l.wait_for(need, now), l) for l in self.lanes if not l.slow]
-            if avoid and any(l.name != avoid and w < float("inf") for w, l in fast):
-                fast = [(w + (30 if l.name == avoid else 0), l) for w, l in fast]   # prefer a second opinion
             slow = [(l.wait_for(need, now), l) for l in self.lanes if l.slow]
+            if avoid:
+                # a second opinion must come from ANOTHER model: wait for one (the slow backup included) up to max_wait;
+                # only when none is reachable at all does the same model answer – and the log says so
+                others = [(w, l) for w, l in fast + slow if l.name != avoid and w <= self.max_wait]
+                if others:                                # a slow lane also needs ~60–90 s to answer: count that
+                    w, l = min(others, key=lambda x: x[0] + (75 if x[1].slow else 0))
+                    l.used.append((now + w, need))
+                    return l, w
             best = min(fast, key=lambda x: x[0], default=(float("inf"), None))
             if best[0] > self.max_wait:
                 s = min(slow, key=lambda x: x[0], default=(float("inf"), None))
@@ -261,7 +267,7 @@ class ChainClient:
                 time.sleep(wait)
             try:
                 resp = lane.client.create(model=lane.model, **kw)
-                self.last_provider = lane.name
+                self.last_provider = lane.name + (" (same model – no other reachable)" if avoid and lane.name == avoid else "")
                 RUN_USAGE[lane.name] = RUN_USAGE.get(lane.name, 0) + 1
                 if mode == "on":
                     cache_put(kw, {"provider": lane.name, "content": [{"type": b.type, "input": b.input, "text": b.text}

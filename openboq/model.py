@@ -51,7 +51,7 @@ class Flag:
     reference: str = ""          # legal / normative basis (VOB/B, VOB/C, DIN ...)
     exposure_eur: float = 0.0    # estimated money at risk
     suggestion: str = ""         # proposed fix
-    source: str = "rules"        # "rules" | "ifc" | "llm"
+    source: str = "rules"        # "rules" | "llm" | "prices" | "history"
     confidence: float = 1.0
     en: dict = field(default_factory=dict)   # English texts: {"title", "message", "suggestion"}
     category: str = ""           # "error" | "risk" | "opportunity" | "security" (contractor view)

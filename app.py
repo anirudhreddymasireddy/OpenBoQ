@@ -30,7 +30,6 @@ from openboq.inject import inject
 from openboq.pipeline import analyze
 from openboq.report import to_excel, to_html
 from openboq.sample import make_sample_boq
-from openboq.sample_ifc import make_sample_ifc
 
 st.set_page_config(page_title="OpenBoQ", page_icon="📐", layout="wide")
 DATA = Path(__file__).parent / "data"
@@ -48,24 +47,6 @@ def _save(upload) -> Path:
     return p
 
 
-def _pair_ifc(lv_name: str, ifc_paths: dict, n_lv: int):
-    """IFC model for a BoQ file: same file name stem, or best overlap of name parts; a single model is used for all."""
-    if not ifc_paths:
-        return None
-    if len(ifc_paths) == 1:
-        return next(iter(ifc_paths.values()))
-    import re as _re
-    stem = Path(lv_name).stem.lower()
-    words = set(_re.findall(r"[a-zäöü0-9]{3,}", stem))
-    best, score = None, 0
-    for name, path in ifc_paths.items():
-        w = set(_re.findall(r"[a-zäöü0-9]{3,}", Path(name).stem.lower()))
-        sc = 10 if Path(name).stem.lower() == stem else len(words & w)
-        if sc > score:
-            best, score = path, sc
-    return best
-
-
 def _projects(batch: dict, lang: str = "de") -> dict:
     """Files of the same project (same item numbers/quantities, any format) -> one merged entry each, plus the
     differences between the versions as findings."""
@@ -81,8 +62,7 @@ def _projects(batch: dict, lang: str = "de") -> dict:
     merged = {}
     for k, names in enumerate(X.group_projects(boqs), 1):
         label = f"🔗 Projekt {k} ({len(names)} Dateien)" if lang == "de" else f"🔗 Project {k} ({len(names)} files)"
-        merged[label] = {"boq": X.merge(boqs, names), "ifc": next((batch[n]["ifc"] for n in names if batch[n]["ifc"]), None),
-                         "error": "", "extra": X.compare(boqs, names), "files": names}
+        merged[label] = {"boq": X.merge(boqs, names), "error": "", "extra": X.compare(boqs, names), "files": names}
         for n in names:
             batch[n]["project"] = k
     st.session_state["merged"], st.session_state["merged_for"] = merged, key
@@ -111,7 +91,7 @@ def _batch_overview(batch: dict, use_llm: bool, lang: str):
             prog.progress(k / len(todo), text=f"{n} ({k + 1}/{len(todo)})" + (" · KI" if use_llm and de_ else " · AI" if use_llm else ""))
             e = batch[n]
             try:
-                r_ = analyze(e["boq"], ifc=e["ifc"], use_llm=use_llm, lang=lang, source=n, feedback="auto", rules="auto")
+                r_ = analyze(e["boq"], use_llm=use_llm, lang=lang, source=n, feedback="auto", rules="auto")
                 r_.flags += e.get("extra", [])
                 if e.get("files"):
                     from openboq import crossfile as X
@@ -149,7 +129,6 @@ def _batch_overview(batch: dict, use_llm: bool, lang: str):
             "Risiko €" if de_ else "Risk €": round(r.exposure, 0),
             "Summenprüfung" if de_ else "Totals check": ("❌ " + money(tot.exposure_eur, lang)) if tot else
             ("✅" if b.totals else "–"),
-            "IFC": "✓" if e["ifc"] else "",
             "KI" if de_ else "AI": ("⚠" if r.llm_errors else "✓") if use_llm else "",
             "Abweichungen" if de_ else "Version diffs": diffs if e.get("files") else None,
         })
@@ -170,7 +149,7 @@ def _batch_overview(batch: dict, use_llm: bool, lang: str):
                            index=ok.index(st.session_state.get("open_file")) if st.session_state.get("open_file") in ok else 0)
     if sel and sel != st.session_state.get("open_file"):
         st.session_state["open_file"] = sel
-        st.session_state["boq"], st.session_state["ifc"] = batch[sel]["boq"], batch[sel]["ifc"]
+        st.session_state["boq"] = batch[sel]["boq"]
         st.session_state["source"] = sel
         st.session_state["extra_flags"] = batch[sel].get("extra", [])
         st.rerun()
@@ -242,8 +221,6 @@ with st.sidebar:
     lv_ups = st.file_uploader(T("upload_lv", lang) + (" (mehrere möglich)" if lang == "de" else " (several allowed)"),
                               type=["x81", "x83", "x84", "x86", "xml", "d81", "d83", "d84", "d86", "pdf", "docx", "txt",
                                     "csv", "xlsx"], accept_multiple_files=True)
-    ifc_ups = st.file_uploader(T("upload_ifc", lang) + (" (Zuordnung über Dateinamen)" if lang == "de" else
-                                                        " (matched by file name)"), type=["ifc"], accept_multiple_files=True)
     with st.expander(T("demo_box", lang)):
         demo = st.button(T("load_demo", lang), width="stretch")
         seed = st.number_input(T("demo_seed", lang), 0, 999, 1, help=T("demo_seed_help", lang))
@@ -280,17 +257,14 @@ if auth.enabled() and not st.session_state.get("user"):
 
 if demo:
     DATA.mkdir(exist_ok=True)
-    buggy, truth = inject(make_sample_boq(), n_item=10, n_lv=2, seed=int(seed))
-    make_sample_ifc(DATA / "sample_model.ifc")
+    buggy, _truth = inject(make_sample_boq(), n_item=10, n_lv=2, seed=int(seed))
     st.session_state["boq"] = buggy
-    st.session_state["ifc"] = str(DATA / "sample_model.ifc")
-    st.session_state["truth"] = truth
     st.session_state["source"] = "demo"
-elif lv_ups and st.session_state.get("upload_name") != (tuple(f.name for f in lv_ups), tuple(f.name for f in ifc_ups or [])):
-    batch, ifc_paths = {}, {f.name: str(_save(f)) for f in ifc_ups or []}
+elif lv_ups and st.session_state.get("upload_name") != tuple(f.name for f in lv_ups):
+    batch = {}
     prog = st.progress(0.0, text=T("checking", lang))
     for k, up in enumerate(lv_ups):
-        entry = {"ifc": _pair_ifc(up.name, ifc_paths, len(lv_ups)), "error": ""}
+        entry = {"error": ""}
         try:
             entry["boq"] = load_boq(_save(up))
         except Exception as e:                      # one broken file must not stop the batch
@@ -303,9 +277,8 @@ elif lv_ups and st.session_state.get("upload_name") != (tuple(f.name for f in lv
     first = next((n for n, e in batch.items() if e["boq"] is not None), None)
     st.session_state["open_file"] = first
     if first:
-        st.session_state["boq"], st.session_state["ifc"] = batch[first]["boq"], batch[first]["ifc"]
-    st.session_state["truth"] = None
-    st.session_state["upload_name"] = (tuple(f.name for f in lv_ups), tuple(f.name for f in ifc_ups or []))
+        st.session_state["boq"] = batch[first]["boq"]
+    st.session_state["upload_name"] = tuple(f.name for f in lv_ups)
     st.session_state["source"] = first or ""
 
 # ---------------------------------------------------------------- batch overview (several files)
@@ -338,14 +311,14 @@ if client:
     boq.client = client
 meta = {"client": client, "public": public, "project_type": ptype}
 
-# rules/IFC findings carry both languages; only the AI layer depends on the language
+# rule findings carry both languages; only the AI layer depends on the language
 # past projects (milestone 4): an uploaded / example file chosen in the history tab, else data/history.csv if present
 hist_src = st.session_state.get("history_path") or "auto"
-ck = (id(boq), st.session_state.get("ifc"), use_llm, lang if use_llm else "-", client, public,
+ck = (id(boq), use_llm, lang if use_llm else "-", client, public,
       st.session_state.get("fb_version", 0), st.session_state.get("rules_version", 0), hist_src)
 if st.session_state.get("ck") != ck:
     with st.spinner(T("checking", lang)):
-        st.session_state["res"] = analyze(boq, ifc=st.session_state.get("ifc"), use_llm=use_llm, lang=lang,
+        st.session_state["res"] = analyze(boq, use_llm=use_llm, lang=lang,
                                           source=st.session_state.get("source", ""),
                                           prices=None if st.session_state.get("source") == "demo" else "auto",
                                           feedback=store, meta=meta,
@@ -424,10 +397,10 @@ if debug:
         if getattr(res, "llm_errors", None):
             st.code("\n".join(res.llm_errors))
 
-tab_top, tab_rev, tab_q, tab_rules, tab_all, tab_pos, tab_hist, tab_what, tab_ifc, tab_eval = st.tabs(
+tab_top, tab_rev, tab_q, tab_rules, tab_all, tab_pos, tab_hist, tab_what = st.tabs(
     [T("tab_top", lang), T("tab_review", lang), T("tab_questions", lang), T("tab_rules", lang), T("tab_all", lang),
      T("tab_pos", lang), "📈 " + ("Historie & Zuschläge" if lang == "de" else "History & markups"),
-     "🔀 " + ("Was-wäre-wenn" if lang == "de" else "What-if"), T("tab_ifc", lang), T("tab_eval", lang)])
+     "🔀 " + ("Was-wäre-wenn" if lang == "de" else "What-if")])
 
 with tab_hist:
     from openboq.ui_history import history_tab
@@ -693,35 +666,6 @@ with tab_pos:
             from openboq.llm_checks import llm_fix_text
             with st.spinner(T("fixing", lang)):
                 st.success(llm_fix_text(it, its_flags))
-
-with tab_ifc:
-    if res.ifc_table:
-        from openboq.ifc_check import MAPPING_EN
-        t = pd.DataFrame(res.ifc_table)
-        if lang == "en":
-            t["Prüfgruppe"] = t["Prüfgruppe"].map(lambda g: MAPPING_EN.get(g, g))
-            t["Status"] = t["Status"].map(lambda s: T("st_" + s, "en"))
-        t["Abweichung"] = t["Abweichung"].map(lambda v: "" if pd.isna(v) else f"{v:+.1%}")
-        t = t.rename(columns={"Prüfgruppe": T("col_group", lang), "Bauteile": T("col_elements", lang),
-                              "Modell": T("col_model", lang), "LV": T("col_lv", lang), "Einheit": T("col_unit", lang),
-                              "Abweichung": T("col_dev", lang), "OZ": T("c_oz", lang)})
-        st.dataframe(t, width="stretch", hide_index=True)
-        st.caption(T("ifc_caption", lang))
-    else:
-        st.info(T("no_ifc", lang))
-
-with tab_eval:
-    truth = st.session_state.get("truth")
-    if truth:
-        from openboq.evaluate import score
-        found, fps, _ = score(res.flags, truth)
-        st.metric(T("eval_found", lang), f"{sum(found)} / {len(truth)}")
-        st.dataframe(pd.DataFrame([{T("eval_type", lang): g["type"], T("c_oz", lang): g["oz"] or g.get("match", ""),
-                                    T("eval_hit", lang): "✅" if ok else "❌"} for g, ok in zip(truth, found)]),
-                     hide_index=True, width="stretch")
-        st.caption(f"{T('eval_fp', lang)}: {len(fps)}")
-    else:
-        st.info(T("eval_only_demo", lang))
 
 st.divider()
 d1, d2 = st.columns(2)

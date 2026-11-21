@@ -4,11 +4,9 @@ from pathlib import Path
 from openboq.evaluate import run
 from openboq.gaeb_parser import parse_gaeb_xml, parse_number
 from openboq.gaeb_writer import write_gaeb
-from openboq.ifc_check import check_ifc
 from openboq.pipeline import analyze
 from openboq.rules import run_rules
 from openboq.sample import make_sample_boq
-from openboq.sample_ifc import make_sample_ifc
 
 
 def test_number_parsing():
@@ -36,15 +34,6 @@ def test_planted_errors_found():
     r = run(n_runs=20)
     assert r["recall"] >= 0.95
     assert r["precision"] >= 0.95
-
-
-def test_ifc_crosscheck(tmp_path: Path):
-    ifc = make_sample_ifc(tmp_path / "m.ifc")
-    flags, table = check_ifc(make_sample_boq(), ifc)
-    titles = " ".join(f.title for f in flags)
-    assert "Unterzüge" in titles                 # element in model, missing in LV
-    assert "Decken – Beton" in titles            # +13 % deviation
-    assert not any("Bodenplatte" in f.title for f in flags)
 
 
 class _FakeClient:

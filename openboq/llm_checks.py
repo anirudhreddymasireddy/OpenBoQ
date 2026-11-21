@@ -3,7 +3,7 @@ contradictions between items, untendered 'Besondere Leistungen', missing compani
 rewrites faulty items in STLB-Bau style, and writes the executive summary.
 
 Set ANTHROPIC_API_KEY to enable. Model can be overridden with NR_MODEL.
-Everything works without it – the rules + IFC layers are fully offline.
+Everything works without it – the rule layer is fully offline.
 """
 from __future__ import annotations
 
@@ -330,7 +330,7 @@ def llm_item_checks(boq: BoQ, model: str = DEFAULT_MODEL, batch: int = 20, clien
     examples = load_examples() if examples is None else examples
     known_txt = ""
     if known:
-        known_txt = "\n\nBereits durch Regeln/IFC erkannt (nicht erneut melden):\n" + "\n".join(
+        known_txt = "\n\nBereits durch Regeln erkannt (nicht erneut melden):\n" + "\n".join(
             f"- {f.oz or 'LV'}: {f.title}" for f in known if f.severity in ("high", "medium") and f.rule_id not in AI_JUDGED)
     if candidates:
         known_txt += ("\n\nKurztext-Kandidaten (nur Kurztext, kein Langtext): Beurteile mit dem Zusammenhang der Nachbarpositionen, "
@@ -456,7 +456,10 @@ def llm_summary(boq: BoQ, flags: list[Flag], model: str = DEFAULT_MODEL, client=
 # ---------------------------------------------------------------- client reviewer (devil's advocate)
 
 # findings that are facts, not opinions: the reviewer may comment, but never lower them
-OBJECTIVE = {"R01", "R21", "R22", "R25", "R26", "X01", "X02", "S01", "S02", "M01"}
+OBJECTIVE = {"R01", "R21", "R22", "R25", "R26", "R28", "R30", "R31", "X01", "X02", "S01", "S02", "M01"}
+# findings that rest on data outside the tender (reference prices, past projects): the client side cannot rebut
+# them from the document, so they are not sent to the second check at all
+EXTERNAL_BASIS = {"R05", "R24", "R32", "R33", "R34"}
 CHALLENGE_SYSTEM = """Du prüfst Befunde eines Bieters aus Sicht des AUFTRAGGEBERS (Advocatus Diaboli): Wie würde der AG bzw.
 sein Planer auf jeden Befund antworten, um ihn zurückzuweisen? Sei kritisch, aber ehrlich.
 Pro Befund:
@@ -484,8 +487,8 @@ def llm_challenge(boq: BoQ, flags: list[Flag], lang: str = "de", model: str = DE
                   top: int = 12) -> list[Flag]:
     """One request: the client's side tries to rebut the strongest findings. Judgment calls that it can argue against
     are lowered (weak: one level, rebutted with a verified quote: info); factual findings only get the comment."""
-    cands = sorted([f for f in flags if f.severity in ("high", "medium") and f.decision.get("status") != "dismissed"],
-                   key=lambda f: -f.exposure_eur)[:top]
+    cands = sorted([f for f in flags if f.severity in ("high", "medium") and f.decision.get("status") != "dismissed"
+                    and f.rule_id not in EXTERNAL_BASIS], key=lambda f: -f.exposure_eur)[:top]
     if not cands:
         return flags
     client = client or _client()
