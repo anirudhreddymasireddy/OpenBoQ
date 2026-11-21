@@ -264,3 +264,12 @@ def test_openrouter_adapter_parses_messy_json(monkeypatch):
     flags = llm_checks.llm_item_checks(boq, client=client, examples=[])
     assert flags and flags[0].title == "Pauschale Tagesstrafe" and flags[0].oz == ""
     assert "5000 Euro pro Tag" in seen["system"]
+
+
+def test_every_rule_has_a_name():
+    """Every check the app can show has a readable name (no bare ids like 'R26 (R26)' in the UI)."""
+    from openboq.i18n import RULE_NAMES
+    from openboq.rules import CATEGORY
+    ids = set(CATEGORY) | {"X01", "X02", "M00"} | {"AI-" + c[:12].upper() for c in (
+        "unklar", "pflichtangabe", "besondere_leistung", "widerspruch", "einheit_menge", "risikoverlagerung", "sonstiges")}
+    assert not ids - set(RULE_NAMES)

@@ -21,6 +21,94 @@ PRESETS = {   # name (de, en) -> driver changes
 }
 
 
+def _forecast_block(lang: str) -> tuple[dict, dict, str]:
+    """Construction start + duration -> expected price change per driver, a small chart and the data status."""
+    from datetime import date
+
+    from . import forecast as F
+    de = lang == "de"
+    L = (lambda a, b: a if de else b)
+    data, origin = F.load()
+    if not data.get("history"):
+        st.warning(L("Keine Preisdaten verfügbar.", "No price data available."))
+        return {}, {}, ""
+    today = date.today()
+    t = today.year * 12 + today.month + 2          # default: three months from now
+    c1, c2, c3 = st.columns([1, 1, 2])
+    start = c1.date_input(L("Baubeginn", "Construction start"), date(t // 12, t % 12 + 1, 1), min_value=today,
+                          max_value=date(today.year + 4, 12, 31), key="wi_fc_start", format="DD.MM.YYYY" if de else "YYYY-MM-DD")
+    months = c2.number_input(L("Bauzeit (Monate)", "Duration (months)"), 1, 60, 12, key="wi_fc_months")
+    fc = F.forecast_all(data, start, int(months))
+    chg = F.expected_changes(fc, start, int(months))
+    name = lambda k: W.DRIVERS[k][0] if de else W.DRIVERS[k][1]
+    order = sorted(fc, key=lambda k: -abs(chg[k][0]))
+    show = c3.selectbox(L("Verlauf anzeigen", "Show history for"), order, format_func=name, key="wi_fc_show")
+    st.altair_chart(_forecast_chart(fc[show], start, int(months), lang), width="stretch")
+
+    s = F.data_status(data)
+    src = W.DRIVERS[show][0] if de else W.DRIVERS[show][1]
+    f = fc[show]
+    how = (L(f"folgt der Weltbank-Prognose für {F.COMMODITIES[f.commodity][1]} mit Elastizität {f.beta:.2f} "
+             "(aus der Historie geschätzt)",
+             f"follows the World Bank forecast for {F.COMMODITIES[f.commodity][2]} with elasticity {f.beta:.2f} "
+             "(estimated from history)") if f.method == "commodity" else
+           L(f"Trend der letzten 36 Monate fortgeschrieben ({100 * f.trend:+.1f} % p. a.)",
+             f"trend of the last 36 months extended ({100 * f.trend:+.1f} % a year)"))
+    st.caption(f"**{src}:** {how}. " + L("Index", "Index") + f": {F.DRIVER_SOURCES[show][3 if de else 4]}. " +
+               L("Spanne = ±1 Standardabweichung der 12-Monats-Änderungen der letzten fünf Jahre.",
+                 "Range = ±1 standard deviation of the 12-month changes over the last five years."))
+    stand = L("Stand", "Data as of") + f": Eurostat {s['eurostat_last']}" + \
+        (f", {L('Weltbank', 'World Bank')} CMO {L(s['wb_release'].replace('October', 'Oktober'), s['wb_release'])}"
+         if s["wb_release"] else "") + \
+        (L(" (mitgelieferte Kopie)", " (bundled copy)") if origin == "snapshot" else "") + ". " + \
+        L("Mittelwert über die Bauzeit gegenüber heute; Weltbankpreise in US-Dollar (ohne Wechselkurs). "
+          "Wird täglich im Hintergrund aktualisiert.",
+          "Average over the construction period against today; World Bank prices in US dollars (no exchange rate). "
+          "Refreshed daily in the background.")
+    st.caption(stand)
+    preset = {d: e for d, (e, _, _) in chg.items()}
+    rng = {d: (lo, hi) for d, (_, lo, hi) in chg.items()}
+    return preset, rng, f"{start:%Y%m}_{int(months)}_{s['eurostat_last']}"
+
+
+def _forecast_chart(f, start, months: int, lang: str):
+    """Last five years + forecast with range for one driver, index (latest month = 100), construction period shaded."""
+    import altair as alt
+    de = lang == "de"
+    hist = [(k, v) for k, v in sorted(f.history.items()) if k >= _shift(f.last, -59)]
+    end = _shift(f"{start:%Y-%m}", months)
+    rows = [{"m": k, "v": v, "lo": None, "hi": None, "kind": "Ist" if de else "Actual"} for k, v in hist]
+    rows += [{"m": f.last, "v": 100.0, "lo": 100.0, "hi": 100.0, "kind": "Prognose" if de else "Forecast"}]
+    rows += [{"m": k, "v": v, "lo": f.low[k], "hi": f.high[k], "kind": "Prognose" if de else "Forecast"}
+             for k, v in sorted(f.path.items()) if k <= end]
+    df = pd.DataFrame(rows)
+    df["m"] = pd.to_datetime(df["m"] + "-01")
+    x = alt.X("m:T", title=None, axis=alt.Axis(format="%Y", tickCount="year", grid=False))
+    y = alt.Y("v:Q", title=None, scale=alt.Scale(zero=False), axis=alt.Axis(gridColor="#E3E8ED", gridDash=[2, 2]))
+    win = pd.DataFrame([{"a": pd.Timestamp(f"{start:%Y-%m}-01"), "b": pd.Timestamp(end + "-01"),
+                         "t": "Bauzeit" if de else "Construction"}])
+    shade = alt.Chart(win).mark_rect(color="#5F6B78", opacity=0.10).encode(x="a:T", x2="b:T")
+    label = alt.Chart(win).mark_text(align="left", baseline="top", dx=4, dy=4, color="#5F6B78", fontSize=11) \
+        .encode(x="a:T", y=alt.value(0), text="t:N")
+    fcd = df[df["lo"].notna()]
+    band = alt.Chart(fcd).mark_area(color="#C9561A", opacity=0.15).encode(x=x, y="lo:Q", y2="hi:Q")
+    line = alt.Chart(df).mark_line(color="#C9561A", strokeWidth=2).encode(
+        x=x, y=y, strokeDash=alt.StrokeDash("kind:N", legend=None,
+                                            scale=alt.Scale(range=[[1, 0], [5, 3]])))
+    tip = alt.Chart(df).mark_point(size=120, opacity=0).encode(
+        x=x, y="v:Q", tooltip=[alt.Tooltip("m:T", format="%m/%Y", title="Monat" if de else "Month"),
+                               alt.Tooltip("kind:N", title=" "), alt.Tooltip("v:Q", format=".1f", title="Index"),
+                               alt.Tooltip("lo:Q", format=".1f", title="min"), alt.Tooltip("hi:Q", format=".1f", title="max")])
+    base = alt.Chart(pd.DataFrame([{"y": 100}])).mark_rule(color="#8A96A3", strokeWidth=1).encode(y="y:Q")
+    return (shade + label + base + band + line + tip).properties(height=200).configure_view(stroke=None)
+
+
+def _shift(mk: str, n: int) -> str:
+    y, m = map(int, mk.split("-"))
+    t = y * 12 + m - 1 + n
+    return f"{t // 12}-{t % 12 + 1:02d}"
+
+
 @st.fragment   # sliders rerun only this tab, not the whole page
 def whatif_tab(res, boq, lang: str, eur):
     de = lang == "de"
@@ -28,16 +116,25 @@ def whatif_tab(res, boq, lang: str, eur):
     sugg = res.price_suggestions
     ctx = W.contract_context(boq)
 
+    fc_name = L("Prognose zum Baubeginn (Eurostat / Weltbank)", "Forecast for construction start (Eurostat / World Bank)")
     names = [k[0] if de else k[1] for k in PRESETS]
+    names.insert(1, fc_name)
     pick = st.selectbox(L("Szenario", "Scenario"), names, key="wi_preset")
-    preset = list(PRESETS.values())[names.index(pick)]
+    rng = {}
+    if pick == fc_name:
+        preset, rng, fkey = _forecast_block(lang)
+    else:
+        preset, fkey = PRESETS[next(k for k in PRESETS if pick in k)], ""
     st.caption(L("Szenario wählen und einzelne Preise anpassen (Änderung gegenüber den Preisen im LV).",
                  "Choose a scenario and adjust individual prices (change against the prices in the BoQ)."))
     changes = {}
     cols = st.columns(3)
     for k, (d, (dn, en)) in enumerate(W.DRIVERS.items()):
-        changes[d] = cols[k % 3].slider(dn if de else en, -30, 60, int(round(100 * preset.get(d, 0))), step=5,
-                                        format="%d %%", key=f"wi_{d}_{pick}") / 100
+        v = max(-30, min(60, int(round(100 * preset.get(d, 0)))))
+        hlp = (L("Prognosespanne", "Forecast range") + f": {100 * rng[d][0]:+.1f} … {100 * rng[d][1]:+.1f} %") \
+            if d in rng else None
+        changes[d] = cols[k % 3].slider(dn if de else en, -30, 60, v, step=1, help=hlp,
+                                        format="%d %%", key=f"wi_{d}_{pick}_{fkey}") / 100
 
     c1, c2 = st.columns(2)
     esc = c1.checkbox(L("Stoffpreisgleitklausel vereinbart (Stahl, Bitumen, Diesel, Kunststoff)",

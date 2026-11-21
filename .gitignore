@@ -11,6 +11,7 @@ data/feedback.db
 data/users.json
 data/rules.json
 data/llm_cache/
+data/price_cache/
 data/history.csv
 data/history_upload_*
 data/history_example.csv

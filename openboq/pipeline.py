@@ -174,11 +174,14 @@ def analyze(boq: BoQ, use_llm: bool = False, llm_client=None, model: Optional[st
         except Exception:
             summary = ""
     from .rules import CATEGORY, _question
-    llm_cat = {"unklar": "opportunity", "pflichtangabe": "risk", "besondere_l": "opportunity", "widerspruch": "error",
-               "einheit_meng": "error", "risikoverlag": "risk"}
+    # AI findings carry "AI-" + the first 12 letters of their category ("AI-BESONDERE_LE") – match on the start
+    llm_cat = {"unklar": "opportunity", "pflichtangabe": "risk", "besondere_leistung": "opportunity", "widerspruch": "error",
+               "einheit_menge": "error", "risikoverlagerung": "risk"}
     for f in flags:
         if not f.category:
-            f.category = CATEGORY.get(f.rule_id) or llm_cat.get(f.rule_id[3:].lower(), "risk")
+            ai = f.rule_id[3:].lower() if f.rule_id.startswith("AI-") else ""
+            f.category = CATEGORY.get(f.rule_id) or next((v for k, v in llm_cat.items() if ai and ai.startswith(k[:10])),
+                                                          "risk")
         if not f.question and f.severity in ("high", "medium") and f.source != "rules":
             f.question = _question(f, boq)
     flags = _merge_ai_duplicates(flags)

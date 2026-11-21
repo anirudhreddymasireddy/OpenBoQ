@@ -1380,7 +1380,7 @@ LV_RULES = [check_completeness, check_clauses, check_penalties, check_totals, ch
 CATEGORY = {"R01": "error", "R04": "error", "R06": "error", "R12": "error", "R13": "error", "R21": "error", "R22": "error",
             "R23": "error", "R02": "error", "R05": "error", "R24": "risk", "R25": "error",
             "R03": "risk", "R09": "risk", "R11": "risk", "R20": "risk", "R07": "risk",
-            "R08": "opportunity", "R10": "opportunity", "R14": "opportunity", "R15": "opportunity", "R16": "risk",
+            "R08": "opportunity", "R10": "opportunity", 
             "R26": "error", "R27": "opportunity", "R28": "error", "R29": "error", "R30": "error", "R31": "error", "R32": "risk", "R33": "opportunity", "R34": "risk", "R35": "error", "M01": "risk", "M02": "risk", "S01": "security", "S02": "security"}
 
 
