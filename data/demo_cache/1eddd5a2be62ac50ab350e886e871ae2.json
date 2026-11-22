@@ -1,0 +1,1 @@
+{"provider": "groq:openai/gpt-oss-20b", "content": [{"type": "tool_use", "input": {"findings": []}, "text": ""}]}
